@@ -10,14 +10,24 @@ from collector.utils import strip_html
 _API_URL = "https://remoteok.io/api"
 
 
-
 class RemoteOKSource(JobSource):
     requires_stealth_pauses = False
 
     def __init__(self, days_back: int = 7, **_):
         self._days_back = days_back
         self._client: httpx.Client | None = None
-        self._jobs_cache: list[dict] | None = None
+        # The unauthenticated API only ever exposes its newest ~100 postings
+        # site-wide (not per-category), so the plain feed alone is a tiny,
+        # increasingly non-tech-dominated sample (verified live: mostly retail/
+        # recruiter-spam postings on a given day). ?tags={tag} narrows the same
+        # endpoint to postings carrying that tag, surfacing tech jobs the plain
+        # feed's window would otherwise miss - but a real match sometimes lacks
+        # the tag too (also verified live), so both are fetched and merged
+        # rather than trusting either alone. Cached separately (generic feed
+        # reused across every query, each tag reused across its 27 candidate-
+        # country location iterations) instead of refetching per call.
+        self._generic_cache: list[dict] | None = None
+        self._tag_cache: dict[str, list[dict]] = {}
 
     @property
     def name(self) -> str:
@@ -29,23 +39,23 @@ class RemoteOKSource(JobSource):
             timeout=30,
             follow_redirects=True,
         )
-        self._jobs_cache = None
+        self._generic_cache = None
+        self._tag_cache = {}
         return self
 
     def __exit__(self, *args):
         if self._client:
             self._client.close()
         self._client = None
-        self._jobs_cache = None
+        self._generic_cache = None
+        self._tag_cache = {}
 
     def login(self) -> None:
         pass
 
-    def _fetch_jobs(self) -> list[dict]:
-        if self._jobs_cache is not None:
-            return self._jobs_cache
+    def _fetch_url(self, url: str) -> list[dict]:
         try:
-            resp = self._client.get(_API_URL)
+            resp = self._client.get(url)
         except Exception:
             return []
         if resp.status_code != 200:
@@ -57,8 +67,23 @@ class RemoteOKSource(JobSource):
         if not isinstance(data, list) or len(data) < 2:
             return []
         # First element is API metadata, not a job, skip it
-        self._jobs_cache = [item for item in data[1:] if isinstance(item, dict)]
-        return self._jobs_cache
+        return [item for item in data[1:] if isinstance(item, dict)]
+
+    def _fetch_jobs(self, tag: str) -> list[dict]:
+        if self._generic_cache is None:
+            self._generic_cache = self._fetch_url(_API_URL)
+
+        by_url: dict[str, dict] = {j["url"]: j for j in self._generic_cache if j.get("url")}
+
+        if tag:
+            if tag not in self._tag_cache:
+                self._tag_cache[tag] = self._fetch_url(f"{_API_URL}?tags={tag}")
+            for j in self._tag_cache[tag]:
+                u = j.get("url")
+                if u:
+                    by_url.setdefault(u, j)
+
+        return list(by_url.values())
 
     def search(
         self,
@@ -71,8 +96,9 @@ class RemoteOKSource(JobSource):
         days    = days_back if days_back is not None else self._days_back
         cutoff  = datetime.now(timezone.utc) - timedelta(days=days)
         keyword = title.lower()
+        tag     = title.strip().split()[0].lower() if title.strip() else ""
 
-        jobs = self._fetch_jobs()
+        jobs = self._fetch_jobs(tag)
 
         results: list[RawJob] = []
         for job in jobs:

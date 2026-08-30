@@ -202,3 +202,91 @@ class TestRemoteOKSourceSearch:
         assert results[0].posted_at is not None
         posted = datetime.fromisoformat(results[0].posted_at)
         assert (datetime.now(timezone.utc) - posted).days == 5
+
+
+# ── _fetch_jobs: merges the generic feed with a per-tag fetch ─────────────────
+
+
+class TestFetchJobsMergesGenericAndTag:
+    # Regression: the unauthenticated API only ever exposes its newest ~100
+    # postings site-wide (verified live: increasingly dominated by non-tech
+    # postings on a given day), so relevant jobs outside that narrow window were
+    # invisible no matter the query. ?tags={tag} narrows the same endpoint to
+    # postings carrying that tag - fetched and merged with the generic feed
+    # instead of replacing it, since a real match sometimes lacks the tag too
+    # (also verified live).
+
+    def _source_with_urls(self) -> RemoteOKSource:
+        src = RemoteOKSource()
+        src._client = MagicMock()
+        return src
+
+    def test_tag_fetch_is_merged_with_generic_feed(self):
+        generic_job = _make_job(slug="generic-hit", position="Senior PHP Developer")
+        tag_only_job = _make_job(slug="tag-only-hit", position="PHP Backend Engineer")
+        src = self._source_with_urls()
+        src._fetch_url = MagicMock(side_effect=lambda url: (
+            [generic_job] if url == "https://remoteok.io/api" else [tag_only_job]
+        ))
+
+        jobs = src._fetch_jobs("php")
+
+        urls = {j["url"] for j in jobs}
+        assert generic_job["url"] in urls
+        assert tag_only_job["url"] in urls
+
+    def test_duplicate_url_in_both_feeds_kept_once(self):
+        job = _make_job(slug="shared")
+        src = self._source_with_urls()
+        src._fetch_url = MagicMock(return_value=[job])
+
+        jobs = src._fetch_jobs("php")
+
+        assert len(jobs) == 1
+
+    def test_no_tag_only_fetches_generic_feed(self):
+        src = self._source_with_urls()
+        src._fetch_url = MagicMock(return_value=[_make_job()])
+
+        src._fetch_jobs("")
+
+        src._fetch_url.assert_called_once_with("https://remoteok.io/api")
+
+    def test_generic_feed_fetched_once_across_multiple_tags(self):
+        src = self._source_with_urls()
+        src._fetch_url = MagicMock(return_value=[])
+
+        src._fetch_jobs("php")
+        src._fetch_jobs("python")
+
+        generic_calls = [c for c in src._fetch_url.call_args_list if c.args[0] == "https://remoteok.io/api"]
+        assert len(generic_calls) == 1
+
+    def test_same_tag_fetched_once_across_repeated_calls(self):
+        src = self._source_with_urls()
+        src._fetch_url = MagicMock(return_value=[])
+
+        src._fetch_jobs("php")
+        src._fetch_jobs("php")
+
+        tag_calls = [c for c in src._fetch_url.call_args_list if "tags=" in c.args[0]]
+        assert len(tag_calls) == 1
+
+    def test_tag_url_includes_tags_query_param(self):
+        src = self._source_with_urls()
+        src._fetch_url = MagicMock(return_value=[])
+
+        src._fetch_jobs("python")
+
+        called_urls = [c.args[0] for c in src._fetch_url.call_args_list]
+        assert "https://remoteok.io/api?tags=python" in called_urls
+
+
+class TestSearchDerivesTagFromFirstWord:
+    def test_multi_word_title_uses_first_word_as_tag(self):
+        src = RemoteOKSource()
+        src._fetch_jobs = MagicMock(return_value=[])
+
+        src.search("Symfony Developer", "Remote")
+
+        src._fetch_jobs.assert_called_once_with("symfony")
