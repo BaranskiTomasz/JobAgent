@@ -108,13 +108,16 @@ class TestWWRSourceSearch:
         results = src.search("PHP Developer", "Remote", known_urls=known)
         assert results == []
 
-    def test_filters_by_date(self):
+    def test_old_pub_date_is_not_filtered_out(self):
+        # Regression: this feed's own pubDate is unreliable (verified live,
+        # 2026-08-30), so a days_back cutoff against it silently rejected every
+        # single item, every run. The feed only ever returns its ~25 latest
+        # postings anyway, so no date filter is applied here.
         fresh = _item_xml(link="https://weworkremotely.com/remote-jobs/fresh", days_ago=1)
         old   = _item_xml(link="https://weworkremotely.com/remote-jobs/old", days_ago=30)
         src = _build_source([fresh, old], days_back=7)
         results = src.search("Developer", "Remote")
-        assert len(results) == 1
-        assert results[0].url.endswith("/fresh")
+        assert len(results) == 2
 
     def test_respects_max_results(self):
         items = [_item_xml(link=f"https://weworkremotely.com/remote-jobs/{i}") for i in range(5)]
@@ -132,25 +135,11 @@ class TestWWRSourceSearch:
         results = src.search("Developer", "Remote")
         assert results == []
 
-    def test_posted_at_captures_the_publication_date(self):
-        # pubDate was already parsed for the days_back cutoff, then discarded,
-        # RawJob.posted_at carries it through instead.
+    def test_posted_at_is_always_none(self):
+        # This feed's pubDate can't be trusted (verified live, 2026-08-30 - the
+        # newest RSS item claimed an 18-day-old publish date while the site's own
+        # HTML page showed a "Today" posting), so it's never surfaced as posted_at
+        # rather than risk feeding the ranker a wrong age.
         src = _build_source([_item_xml(days_ago=3)])
         results = src.search("PHP Developer", "Remote")
-        assert results[0].posted_at is not None
-        posted = datetime.fromisoformat(results[0].posted_at)
-        assert (datetime.now(timezone.utc) - posted).days == 3
-
-    def test_missing_pub_date_never_crashes_and_posted_at_is_none(self):
-        item = """
-            <item>
-                <title>Acme: PHP Developer</title>
-                <link>https://weworkremotely.com/remote-jobs/no-date</link>
-                <region>Anywhere in the World</region>
-                <description>Great role</description>
-            </item>
-        """
-        src = _build_source([item])
-        results = src.search("PHP Developer", "Remote")
-        assert len(results) == 1
         assert results[0].posted_at is None

@@ -1,7 +1,5 @@
 """We Work Remotely source, public RSS feed, no auth required."""
 import xml.etree.ElementTree as ET
-from email.utils import parsedate_to_datetime
-from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -79,12 +77,6 @@ def _region_matches(wwr_region: str, search_location: str) -> bool:
     return any(a in region for a in aliases)
 
 
-# ── Date parsing ──────────────────────────────────────────────────────────────
-
-def _parse_date(pub_date: str) -> datetime:
-    return parsedate_to_datetime(pub_date)
-
-
 # ── Source ────────────────────────────────────────────────────────────────────
 
 class WWRSource(JobSource):
@@ -92,7 +84,9 @@ class WWRSource(JobSource):
     _FEED_URL = "https://weworkremotely.com/categories/remote-programming-jobs.rss"
 
     def __init__(self, days_back: int = 7, **_):
-        self._days_back = days_back
+        # days_back accepted (unused) for interface parity with collector/sources.make(),
+        # which passes it to every source uniformly - see the note in search() for why
+        # this source can't actually filter by date.
         self._feed_cache: list | None = None
 
     def __enter__(self):
@@ -137,12 +131,15 @@ class WWRSource(JobSource):
         max_results: int | None = None,
         known_urls: set | None = None,
     ) -> list[RawJob]:
+        # No date filtering: this feed's own pubDate is unreliable (verified live,
+        # 2026-08-30 - the newest item in the "remote-programming-jobs" RSS category
+        # claimed a publish date 18 days old, dates weren't even in descending order
+        # across items, while the site's own HTML listing page showed a posting from
+        # "Today"), so a days_back cutoff against it silently rejected every single
+        # item, every run. The RSS feed itself only ever returns the ~25 latest
+        # postings regardless, the same implicit recency bound justjoin.it/remoteok.io
+        # rely on, so no separate date filter is needed here.
         known_urls = known_urls or set()
-        days = days_back if days_back is not None else self._days_back
-        cutoff = (
-            datetime.now(tz=timezone.utc) - timedelta(days=days)
-            if days else None
-        )
 
         results: list[RawJob] = []
 
@@ -150,17 +147,6 @@ class WWRSource(JobSource):
             # URL
             link = (item.findtext("link") or item.findtext("guid") or "").strip()
             if not link or link in known_urls:
-                continue
-
-            # Date filter
-            pub_date_str = item.findtext("pubDate") or ""
-            pub_dt = None
-            if pub_date_str:
-                try:
-                    pub_dt = _parse_date(pub_date_str)
-                except Exception:
-                    pub_dt = None
-            if cutoff and pub_dt and pub_dt < cutoff:
                 continue
 
             # Title → split into company + job_title
@@ -191,7 +177,8 @@ class WWRSource(JobSource):
                 source=self.name,
                 source_id=link.rstrip("/").split("/")[-1],
                 description=description,
-                posted_at=pub_dt.isoformat() if pub_dt else None,
+                # Not populated from this feed's pubDate - see the note in search().
+                posted_at=None,
             ))
 
             if max_results and len(results) >= max_results:

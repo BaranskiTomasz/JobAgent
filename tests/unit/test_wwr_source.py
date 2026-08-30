@@ -7,7 +7,6 @@ import pytest
 from collector.sources.weworkremotely import (
     WWRSource,
     _region_matches,
-    _parse_date,
 )
 from collector.utils import strip_html as _strip_html
 
@@ -101,18 +100,6 @@ class TestRegionMatches:
         assert _region_matches("Europe Only", "Remote") is True
 
 
-# ── TestParseDate ─────────────────────────────────────────────────────────────
-
-class TestParseDate:
-    def test_valid_rfc2822(self):
-        dt = _parse_date("Thu, 02 Jul 2026 15:22:14 +0000")
-        assert isinstance(dt, datetime)
-        assert dt.tzinfo is not None
-        assert dt.year == 2026
-        assert dt.month == 7
-        assert dt.day == 2
-
-
 # ── TestStripHtml ─────────────────────────────────────────────────────────────
 
 class TestStripHtml:
@@ -151,7 +138,12 @@ class TestWWRSourceSearch:
         jobs = WWRSource().search("PHP", "Remote")
         assert jobs == []
 
-    def test_date_filter(self, mocker):
+    def test_old_pub_date_is_not_filtered_out(self, mocker):
+        # Regression: this feed's own pubDate is unreliable (verified live,
+        # 2026-08-30 - the newest RSS item claimed an 18-day-old publish date while
+        # the site's own HTML page showed a "Today" posting), so a days_back cutoff
+        # against it silently rejected every single item, every run. The feed only
+        # ever returns its ~25 latest postings anyway, so no date filter is applied.
         old_date = (datetime.now(tz=timezone.utc) - timedelta(days=60)).strftime(
             "%a, %d %b %Y %H:%M:%S +0000"
         )
@@ -159,7 +151,16 @@ class TestWWRSourceSearch:
         mocker.patch("httpx.get", return_value=_mock_response(feed))
 
         jobs = WWRSource().search("PHP", "Remote", days_back=30)
-        assert jobs == []
+        assert len(jobs) == 1
+
+    def test_posted_at_is_always_none(self, mocker):
+        # This feed's pubDate can't be trusted (see test above), so posted_at is
+        # never populated from it rather than risk feeding the ranker a wrong age.
+        feed = _make_feed([{"title": "AcmeCo: PHP Dev"}])
+        mocker.patch("httpx.get", return_value=_mock_response(feed))
+
+        jobs = WWRSource().search("PHP", "Remote")
+        assert jobs[0].posted_at is None
 
     def test_skips_known_urls(self, mocker):
         url = "https://weworkremotely.com/remote-jobs/acmeco-php-developer"
