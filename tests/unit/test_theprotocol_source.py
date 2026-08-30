@@ -28,6 +28,7 @@ def _offer(
     offer_id="abc-123",
     days_ago=0,
     work_modes=None,
+    technologies=None,
 ):
     published = (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%S.%f")
     return {
@@ -38,6 +39,7 @@ def _offer(
         "workplace": [{"city": city}],
         "workModes": work_modes if work_modes is not None else ["remote"],
         "publicationDateUtc": published,
+        "technologies": technologies if technologies is not None else [],
     }
 
 
@@ -256,6 +258,26 @@ class TestTheProtocolSourceSearch:
         results = src.search("   ", "Poland")
         assert results == []
         src._page.goto.assert_not_called()
+
+    def test_offer_not_matching_tag_is_excluded(self):
+        # Regression: theprotocol.it's /filtry/{tag} URL stopped applying any
+        # server-side filter (verified live 2026-08-30: unrelated and even
+        # nonsense tags returned the identical unfiltered top-50 listing), so
+        # search() has to reject offers itself instead of trusting the site.
+        src = _make_source()
+        unrelated = _offer(title="Scrum Master", technologies=["Azure DevOps", ".NET"])
+        src._page.eval_on_selector.return_value = json.dumps(_search_payload([unrelated]))
+        results = src.search("PHP", "Poland")
+        assert results == []
+
+    def test_offer_matching_via_technologies_list_is_included(self):
+        # The tag can match a listed technology even when it isn't in the title
+        # itself (e.g. a non-PHP role that also lists PHP as a secondary skill).
+        src = _make_source()
+        offer = _offer(title="Scrum Master", technologies=["Azure DevOps", "PHP"])
+        src._page.eval_on_selector.return_value = json.dumps(_search_payload([offer]))
+        results = src.search("PHP", "Poland")
+        assert len(results) == 1
 
     def test_posted_at_captures_the_publication_date(self):
         # publicationDateUtc was already parsed for the days_back cutoff, then

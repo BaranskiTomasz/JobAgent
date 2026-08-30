@@ -16,6 +16,13 @@ a full phrase like "PHP Developer" auto-collapses to just the "PHP" tag in the U
 literal multi-word keyword in the URL returns zero results), so search() uses the first
 word of `title` as the tag, matching how our multi-word title criteria are all phrased
 ("Symfony Developer" -> "symfony", "PHP" -> "php").
+
+As of 2026-08-30 the `/filtry/{tag}` URL no longer applies any server-side filter at
+all (verified live: "python", "php", and a nonsense tag that matches nothing on the
+site all returned the identical top-50 "newest offers" listing, in the same order),
+so search() can no longer trust the site to have already filtered for it. Each
+offer's own `technologies` array (a site-populated list of tech tags, present
+regardless of the broken URL filter) is matched against the tag locally instead.
 """
 import json
 import logging
@@ -173,6 +180,14 @@ class TheProtocolSource(JobSource):
         for offer in offers:
             if max_results and len(results) >= max_results:
                 break
+
+            # The URL's tag no longer filters server-side (see module docstring),
+            # so every offer has to be checked here regardless of which tag was
+            # requested, or every query would return the same unfiltered top-50.
+            technologies = [t.lower() for t in (offer.get("technologies") or [])]
+            offer_title = (offer.get("title") or "").lower()
+            if not any(tag in t for t in technologies) and tag not in offer_title:
+                continue
 
             offer_url_name = offer.get("offerUrlName")
             if not offer_url_name:
