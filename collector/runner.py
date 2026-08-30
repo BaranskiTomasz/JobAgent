@@ -157,7 +157,16 @@ def _search_pause_seconds(new_count: int) -> float:
 
 # Hard ceiling on total search calls in one run, independent of max_jobs,
 # since a job-count budget doesn't help when searches simply find nothing new.
-# Generous on purpose: a safety rail, not a normal-case limit.
+# Generous on purpose: a safety rail, not a normal-case limit. Only counts
+# searches against sources with requires_stealth_pauses=True (LinkedIn,
+# theprotocol, itpracuj): those make one real, paced network request per
+# (title, location) pair, so the count reflects real cost. The worldwide-remote
+# sources (remotive/remoteok/workingnomads/weworkremotely) fetch once per query
+# and then filter that cached response locally per candidate country - counting
+# each of those ~27 free local iterations as a "search" let them exhaust this
+# cap before LinkedIn even finished its own queries, starving every source
+# after them (including every Poland-focused board) of a single real search,
+# every run, since the per-country expansion landed (2026-08-02).
 _MAX_TOTAL_SEARCHES = 150
 
 
@@ -225,7 +234,7 @@ def _collect_job_cards(
                             break
                         if query_budget and jobs_new_this_query >= query_budget:
                             break
-                        if total_searches >= _MAX_TOTAL_SEARCHES:
+                        if source.requires_stealth_pauses and total_searches >= _MAX_TOTAL_SEARCHES:
                             logger.warning(
                                 f"\n[search-cap] Reached the {_MAX_TOTAL_SEARCHES}-search limit for this run, "
                                 "stopping early rather than continuing unbounded."
@@ -240,7 +249,8 @@ def _collect_job_cards(
                         first_search = False
 
                         logger.info(f"\nSearching: {title!r} in {location!r}")
-                        total_searches += 1
+                        if source.requires_stealth_pauses:
+                            total_searches += 1
                         remaining = None
                         if query_budget:
                             remaining = min(query_budget - jobs_new_this_query, source_budget - jobs_new_this_source)

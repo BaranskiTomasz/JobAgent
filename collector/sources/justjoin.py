@@ -37,12 +37,14 @@ def _parse_rsc_offers(html: str) -> list[dict]:
     """Extract the job-listing array embedded in the page's Next.js RSC payload.
 
     Each `self.__next_f.push([<id>, "<json>"])` script tag is a self-contained JSON
-    array, the second element is itself a JSON-escaped string of the form
-    `<hex_id>:<json>` (a React Server Components "row"). We only need the one row that
-    carries the dehydrated react-query state with the OFFERS listing, so we scan each
-    push call independently for that content and parse just that one, no need to
-    reassemble a general cross-chunk stream (other row kinds, e.g. text/hint rows, use
-    a different micro-syntax we don't need to understand for this).
+    array; the second element is a JSON-escaped string containing one or more
+    newline-separated `<hex_id>:<json>` rows (React Server Components "rows"). It
+    used to be one row per push call, but justjoin.it started bundling many rows
+    (95+, verified live) into a single push, so `<hex_id>:<json>` is no longer
+    "everything after the first colon" for the whole chunk - each line has to be
+    split and parsed independently. We only need the one row that carries the
+    dehydrated react-query state with the OFFERS listing (other row kinds, e.g.
+    text/hint rows, use a different micro-syntax we don't need to understand).
     """
     for m in re.finditer(r"self\.__next_f\.push\(", html):
         start = m.end() - 1
@@ -63,28 +65,32 @@ def _parse_rsc_offers(html: str) -> list[dict]:
             continue
         if not (isinstance(arr, list) and len(arr) == 2 and isinstance(arr[1], str)):
             continue
-        text = arr[1]
-        if '"companyName"' not in text or '"employmentTypes"' not in text:
+        chunk = arr[1]
+        if '"companyName"' not in chunk or '"employmentTypes"' not in chunk:
             continue
 
-        try:
-            colon_idx = text.index(":")
-            data = json.loads(text[colon_idx + 1:])
-            queries = data[3]["state"]["queries"]
-        except Exception:
-            continue
+        for line in chunk.split("\n"):
+            if '"queryKey"' not in line or "OFFERS" not in line:
+                continue
+            try:
+                colon_idx = line.index(":")
+                row = json.loads(line[colon_idx + 1:])
+                queries = row[3]["state"]["queries"]
+            except Exception:
+                continue
 
-        for q in queries:
-            key = q.get("queryKey")
-            if key and key[0] == "OFFERS":
-                try:
-                    pages = q["state"]["data"]["pages"]
-                except (KeyError, TypeError):
-                    continue
-                offers = []
-                for page in pages:
-                    offers.extend(page.get("data", []))
-                return offers
+            for q in queries:
+                key = q.get("queryKey")
+                if key and key[0] == "OFFERS":
+                    try:
+                        pages = q["state"]["data"]["pages"]
+                    except (KeyError, TypeError):
+                        continue
+                    offers = []
+                    for page in pages:
+                        offers.extend(page.get("data", []))
+                    if offers:
+                        return offers
     return []
 
 

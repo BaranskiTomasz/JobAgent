@@ -259,10 +259,33 @@ class TestCollectJobCardsBudgetAllocation:
     @patch("collector.runner.search_stats_repository")
     @patch("collector.runner.job_repository")
     @patch("collector.runner.make_source")
-    def test_total_search_count_is_capped(self, mock_make_source, mock_jobs, mock_stats):
+    def test_total_search_count_is_capped_for_paced_sources(self, mock_make_source, mock_jobs, mock_stats):
         # Regression: no upper limit on total searches meant a broad location
         # selection ("+Add all EU countries") times several search-query
-        # criteria could run into the hundreds with no cap at all.
+        # criteria could run into the hundreds with no cap at all, for a
+        # source that pays a real, paced network cost per (title, location).
+        source = _mock_source()
+        source.requires_stealth_pauses = True
+        mock_make_source.return_value = source
+
+        _collect_job_cards(
+            ["linkedin"], ["PHP Developer"], ["Poland", "Germany", "France", "Spain"],
+            days_back=1, max_jobs=None, known_urls=set(), rejected_kw=[], session_id=1,
+        )
+
+        assert source.search.call_count == 2
+
+    @patch("collector.runner._MAX_TOTAL_SEARCHES", 2)
+    @patch("collector.runner.search_stats_repository")
+    @patch("collector.runner.job_repository")
+    @patch("collector.runner.make_source")
+    def test_non_paced_sources_are_not_search_capped(self, mock_make_source, mock_jobs, mock_stats):
+        # Regression: remotive/remoteok/workingnomads/weworkremotely fetch once
+        # per query and filter the cached response locally per candidate
+        # country - each of those free local iterations used to count toward
+        # the same shared cap as a real LinkedIn network search, so on a
+        # multi-country profile they alone could exhaust it before any other
+        # source (including every Poland-focused board) ran a single search.
         source = _mock_source()
         mock_make_source.return_value = source
 
@@ -271,7 +294,7 @@ class TestCollectJobCardsBudgetAllocation:
             days_back=1, max_jobs=None, known_urls=set(), rejected_kw=[], session_id=1,
         )
 
-        assert source.search.call_count == 2
+        assert source.search.call_count == 4
 
 
 class TestCollectJobCardsSearchQueryAttribution:
