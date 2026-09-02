@@ -505,6 +505,7 @@ JobAgent/
 │   └── sources/
 │       ├── linkedin.py             # Playwright + system Chrome, stealth delays
 │       ├── weworkremotely.py       # RSS feed
+│       ├── himalayas.py            # RSS feed
 │       ├── remotive.py             # JSON API
 │       ├── remoteok.py             # JSON API
 │       ├── workingnomads.py        # JSON API

@@ -3,6 +3,7 @@ from collector.sources.remotive import RemotiveSource
 from collector.sources.remoteok import RemoteOKSource
 from collector.sources.workingnomads import WorkingNomadsSource
 from collector.sources.weworkremotely import WWRSource
+from collector.sources.himalayas import HimalayasSource
 from collector.sources.justjoin import JustJoinSource
 from collector.sources.theprotocol import TheProtocolSource
 from collector.sources.itpracuj import ItPracujSource
@@ -15,6 +16,7 @@ _REGISTRY: dict[str, dict] = {
     "remoteok":        {"name": "Remote OK",         "cls": RemoteOKSource},
     "workingnomads":   {"name": "Working Nomads",    "cls": WorkingNomadsSource},
     "weworkremotely":  {"name": "We Work Remotely",  "cls": WWRSource},
+    "himalayas":       {"name": "Himalayas",         "cls": HimalayasSource},
     "justjoin":        {"name": "justjoin.it",       "cls": JustJoinSource},
     "theprotocol":     {"name": "theprotocol.it",    "cls": TheProtocolSource},
     "itpracuj":        {"name": "it.pracuj.pl",      "cls": ItPracujSource},

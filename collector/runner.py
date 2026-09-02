@@ -119,7 +119,7 @@ def _fetch_descriptions_in_batches(jobs_pending_description: list[tuple[str, str
 # which would make a country selection a no-op for these sources. The
 # Poland-focused boards only ever search "Poland", and only when the
 # candidate wants Poland at all.
-_WORLDWIDE_REMOTE_SOURCES = frozenset({"remotive", "remoteok", "workingnomads", "weworkremotely"})
+_WORLDWIDE_REMOTE_SOURCES = frozenset({"remotive", "remoteok", "workingnomads", "weworkremotely", "himalayas"})
 _POLAND_ONLY_SOURCES = frozenset({"justjoin", "theprotocol", "itpracuj", "nofluffjobs", "solidjobs"})
 _POLAND_ALIASES = frozenset({"poland", "polska", "pl"})
 _POLAND_CITIES = frozenset({
