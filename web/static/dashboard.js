@@ -489,6 +489,15 @@ function _renderCard(j) {
   const locFilterValue = _isRemoteLocationText(j.location) ? (_countryOf(j.location) || j.location || '') : (j.location || '');
   const locFilterKey = 'loc=' + locFilterValue;
   const locLabel = j.location || '—';
+  const companyAppliedBadge = j.company_applied_count > 0
+    ? `<span class="co-applied-badge" title="You've applied to ${j.company_applied_count} job(s) from this company before">
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+         Applied before
+       </span>`
+    : '';
+  const companyCountBadge = j.company_total_count > 1
+    ? `<span class="co-count-badge" title="${j.company_total_count} listings from this company in your pool">${j.company_total_count}×</span>`
+    : '';
 
   const reason = j.rank_reason || j.score_reason || '';
   let rejNote = null;
@@ -514,6 +523,8 @@ function _renderCard(j) {
           <a class="job-title" href="${safeUrl(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a>
           <div class="job-meta">
             <button type="button" class="co${on('firm=' + j.company)}" onclick="toggleBadgeFilter('firm=${escJs(j.company || '')}')">${esc(j.company)}</button>
+            ${companyCountBadge}
+            ${companyAppliedBadge}
             <button type="button" class="loc${on(locFilterKey)}" onclick="toggleBadgeFilter('${escJs(locFilterKey)}')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 6-9 12-9 12s-9-6-9-12a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
               ${esc(locLabel)}

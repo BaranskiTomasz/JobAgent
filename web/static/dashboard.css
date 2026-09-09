@@ -280,6 +280,10 @@ h1,h2,h3 { text-wrap: balance; }
 .src-badge:hover { border-color: var(--signal); color: var(--signal); }
 .src-badge.on { background: var(--signal); border-color: var(--signal); color: var(--signal-ink); }
 
+.co-applied-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 0.66rem; font-weight: 600; letter-spacing: 0.01em; color: var(--flag-red); background: var(--flag-red-soft); border: 1px solid color-mix(in srgb, var(--flag-red) 35%, var(--line)); border-radius: 7px; padding: 2px 7px; white-space: nowrap; }
+.co-applied-badge svg { width: 10px; height: 10px; flex: none; }
+.co-count-badge { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 600; color: var(--ink-faint); background: var(--paper-sunk); border: 1px solid var(--line); border-radius: 7px; padding: 2px 7px; white-space: nowrap; }
+
 .score-block { flex: none; display: flex; align-items: center; gap: 14px; }
 .rank-badge { font-family: var(--font-mono); font-size: 0.78rem; color: var(--signal); background: var(--signal-soft); border-radius: 8px; padding: 4px 9px; font-weight: 600; letter-spacing: -0.01em; }
 .rank-badge.na { color: var(--ink-faint); background: var(--paper-sunk); }
