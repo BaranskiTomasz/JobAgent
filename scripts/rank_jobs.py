@@ -12,7 +12,7 @@ import sys
 import logging
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.stdout.reconfigure(line_buffering=True)
+sys.stdout.reconfigure(line_buffering=True, encoding="utf-8", errors="replace")
 # No local logger, this script prints its own output directly, but still
 # needs this so log messages from imported modules (e.g. ranker/retry.py's
 # retry warnings) actually reach stdout instead of going nowhere.

@@ -415,7 +415,7 @@ def run(
 if __name__ == "__main__":
     import argparse
 
-    sys.stdout.reconfigure(line_buffering=True)
+    sys.stdout.reconfigure(line_buffering=True, encoding="utf-8", errors="replace")
     logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(message)s")
 
     parser = argparse.ArgumentParser(description="Collect job listings")

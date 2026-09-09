@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from db.repositories import job_repository
 from collector.runner import _fetch_descriptions_stealthily, _fetch_descriptions_directly
 
-sys.stdout.reconfigure(line_buffering=True)
+sys.stdout.reconfigure(line_buffering=True, encoding="utf-8", errors="replace")
 
 missing = job_repository.get_missing_descriptions()
 total = len(missing)

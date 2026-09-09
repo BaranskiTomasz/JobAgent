@@ -299,6 +299,6 @@ def run() -> dict:
 
 
 if __name__ == "__main__":
-    sys.stdout.reconfigure(line_buffering=True)
+    sys.stdout.reconfigure(line_buffering=True, encoding="utf-8", errors="replace")
     logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(message)s")
     run()

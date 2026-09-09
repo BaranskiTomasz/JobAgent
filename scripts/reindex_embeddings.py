@@ -17,7 +17,7 @@ import api_client
 from config import MODEL_COSTS, VOYAGE_EMBED_MODEL
 from embeddings.indexer import index_jobs
 
-sys.stdout.reconfigure(line_buffering=True)
+sys.stdout.reconfigure(line_buffering=True, encoding="utf-8", errors="replace")
 
 _EST_TOKENS_PER_JOB = 500  # title + up to ~2000-char description excerpt
 

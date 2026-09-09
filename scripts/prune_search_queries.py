@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from collector.query_pruning import prune_queries
 
+sys.stdout.reconfigure(line_buffering=True, encoding="utf-8", errors="replace")
 logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
