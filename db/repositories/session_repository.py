@@ -1,4 +1,9 @@
+import math
+from datetime import datetime
+
 import api_client
+
+DEFAULT_DAYS_NO_PRIOR_RUN = 7
 
 
 def start() -> int:
@@ -33,3 +38,19 @@ def get_last_collected_at() -> str | None:
 
 def get_latest() -> dict | None:
     return api_client.get("/api/sessions/latest").json()["session"]
+
+
+def days_since_last_collection() -> int:
+    # Rounded up since collector sources filter by whole days; slight overlap
+    # is harmless (the collector dedupes by URL), under-covering would miss
+    # postings. Reads last-collected, not last-finished, since a non-collector
+    # run (ranking, rescoring) would otherwise narrow this window.
+    last_collected = get_last_collected_at()
+    if not last_collected:
+        return DEFAULT_DAYS_NO_PRIOR_RUN
+    try:
+        last_dt = datetime.fromisoformat(last_collected)
+    except ValueError:
+        return DEFAULT_DAYS_NO_PRIOR_RUN
+    hours_elapsed = (datetime.utcnow() - last_dt).total_seconds() / 3600
+    return max(1, math.ceil(hours_elapsed / 24))

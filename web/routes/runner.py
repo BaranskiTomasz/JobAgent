@@ -1,6 +1,5 @@
 import glob
 import json
-import math
 import os
 import subprocess
 import sys
@@ -42,29 +41,11 @@ def init_sock(app):
     sock.init_app(app)
 
 
-_DEFAULT_DAYS_NO_PRIOR_RUN = 7
-
 # Sentinel substituted with the real session id once _run_pipeline_ws has one,
 # build_stages() runs before the session exists (see its call site below), but
 # the COLLECTOR stage needs to reuse the same session id rather than starting
 # its own, or JobAgentWeb's concurrent-session guard rejects the second start().
 _SESSION_ID_PLACEHOLDER = "__SESSION_ID__"
-
-
-def _days_since_last_run() -> int:
-    # Rounded up since collector sources filter by whole days; slight overlap
-    # is harmless (the collector dedupes by URL), under-covering would miss
-    # postings. Reads last-collected, not last-finished, since a non-collector
-    # run (ranking, rescoring) would otherwise narrow this window.
-    last_collected = session_repository.get_last_collected_at()
-    if not last_collected:
-        return _DEFAULT_DAYS_NO_PRIOR_RUN
-    try:
-        last_dt = datetime.fromisoformat(last_collected)
-    except ValueError:
-        return _DEFAULT_DAYS_NO_PRIOR_RUN
-    hours_elapsed = (datetime.utcnow() - last_dt).total_seconds() / 3600
-    return max(1, math.ceil(hours_elapsed / 24))
 
 
 def _is_run_active() -> bool:
@@ -351,7 +332,7 @@ def _agent_run(ws):
             params = {}
 
         if params.get("since_last_run"):
-            days = _days_since_last_run()
+            days = session_repository.days_since_last_collection()
         else:
             try:
                 days = int(params.get("days", 1))

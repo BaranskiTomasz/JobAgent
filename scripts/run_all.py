@@ -17,7 +17,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from collector.runner import run as collect
-from db.repositories import usage_repository
+from db.repositories import session_repository, usage_repository
 from evaluator.runner import run as evaluate
 from extractor.runner import run_extraction
 
@@ -63,7 +63,7 @@ def _run_script(name: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run full JobAgent pipeline: collect then evaluate")
-    parser.add_argument("--days",           type=int,  default=1,    help="Days back to search (default: 1)")
+    parser.add_argument("--days",           type=int,  default=None, help="Days back to search (default: since the last successful collection, like the dashboard)")
     parser.add_argument("--max-jobs",       type=int,  default=None, help="Max new jobs to collect (default: unlimited)")
     parser.add_argument("--titles",         nargs="*", default=None, help="Override job titles (scoring only)")
     parser.add_argument("--search-queries", nargs="*", default=None, help="Override LinkedIn search queries")
@@ -83,10 +83,15 @@ def main() -> int:
         logger.info(f"JobAgent run started, {datetime.now().strftime('%Y-%m-%d %H:%M')}")
         logger.info("=" * 60)
 
+        days_back = args.days
+        if days_back is None:
+            days_back = session_repository.days_since_last_collection()
+            logger.info(f"No --days given, using {days_back} day(s) since the last successful collection.")
+
         logger.info("\n=== COLLECTOR ===")
         try:
             c_result = collect(
-                days_back=args.days,
+                days_back=days_back,
                 max_jobs=args.max_jobs,
                 titles=args.titles,
                 search_queries_override=args.search_queries,
