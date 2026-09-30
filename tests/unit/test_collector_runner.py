@@ -13,7 +13,7 @@ from collector.runner import (
 class TestLocationsForSource:
     def test_linkedin_searches_candidate_eligibility_scopes_not_employer_markets(self):
         countries = ["Poland", "Germany", "United Kingdom"]
-        assert _locations_for_source("linkedin", countries, "Poland") == ["Poland", "Europe", "EMEA", "Worldwide"]
+        assert _locations_for_source("linkedin", countries, "Poland") == ["Poland"]
 
     def test_remote_feed_uses_work_country_for_eligibility(self):
         assert _locations_for_source("jobscollider", ["United States", "United Kingdom"], "Poland") == ["Poland"]
@@ -369,6 +369,31 @@ class TestCollectJobCardsBudgetAllocation:
         assert result[1] == 4
         assert full.search.call_args.kwargs["max_results"] == 4
 
+    @patch("collector.runner.search_stats_repository")
+    @patch("collector.runner.job_repository")
+    @patch("collector.runner.make_source")
+    def test_per_source_limit_is_never_redistributed(self, mock_make_source, mock_jobs, mock_stats):
+        sources = {}
+        for name in ("remotive", "remoteok"):
+            source = _mock_source()
+            source.search.return_value = [
+                RawJob(title=f"Developer {i}", company=name, location="Remote",
+                       url=f"https://{name}.com/{i}", source=name, description="desc")
+                for i in range(5)
+            ]
+            sources[name] = source
+        mock_make_source.side_effect = lambda source_id, **kw: sources[source_id]
+        mock_jobs.insert.side_effect = lambda **kw: kw["url"]
+
+        result = _collect_job_cards(
+            list(sources), ["Developer"], ["Remote"],
+            days_back=1, max_jobs=None, known_urls=set(), rejected_kw=[], session_id=1,
+            max_jobs_per_source=2,
+        )
+
+        assert result[1] == 4
+        assert all(source.search.call_args.kwargs["max_results"] == 2 for source in sources.values())
+
 
 class TestCollectJobCardsSearchQueryAttribution:
     @patch("collector.runner.search_stats_repository")
@@ -444,7 +469,7 @@ class TestRunSessionOwnership:
         # Reusing a session means the caller owns its whole lifecycle, including
         # marking it collected, that's _run_pipeline_ws's job in this case, not ours.
         mock_session.mark_collected.assert_not_called()
-        assert mock_collect.call_args.args[-2] == 42
+        assert mock_collect.call_args.args[-3] == 42
 
     @patch("collector.runner.apply_keyword_filter")
     @patch("collector.runner.apply_language_filter")

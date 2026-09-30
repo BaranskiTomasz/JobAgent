@@ -8,7 +8,7 @@ import httpx
 
 from collector.base import JobSource, RawJob
 from collector.location import location_matches
-from collector.query_matcher import query_matches
+from collector.query_matcher import query_tokens
 
 _BOARDS_FILE = Path(__file__).with_name("ats_companies.json")
 
@@ -45,6 +45,7 @@ class ATSBoardSource(JobSource):
         self._days_back = days_back
         self._client: httpx.Client | None = None
         self._jobs_cache: list[RawJob] | None = None
+        self._search_index: list[tuple[RawJob, set[str], datetime | None]] | None = None
         entries = json.loads(_BOARDS_FILE.read_text(encoding="utf-8"))
         self._boards = [entry for entry in entries if entry["source"] == self.provider]
 
@@ -60,6 +61,7 @@ class ATSBoardSource(JobSource):
             limits=httpx.Limits(max_connections=12, max_keepalive_connections=12),
         )
         self._jobs_cache = None
+        self._search_index = None
         return self
 
     def __exit__(self, *args):
@@ -67,6 +69,7 @@ class ATSBoardSource(JobSource):
             self._client.close()
         self._client = None
         self._jobs_cache = None
+        self._search_index = None
 
     def _fetch_board(self, board: dict) -> list[RawJob]:
         raise NotImplementedError
@@ -96,15 +99,20 @@ class ATSBoardSource(JobSource):
         days = days_back if days_back is not None else self._days_back
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         jobs = self._fetch_jobs()
+        if self._search_index is None:
+            self._search_index = [
+                (job, set(query_tokens(f"{job.title} {job.description or ''}")), _parse_iso(job.posted_at))
+                for job in jobs
+            ]
+        required = set(query_tokens(title))
         results: list[RawJob] = []
         query_matched = 0
         date_matched = 0
         geo_matched = 0
-        for job in jobs:
-            if not query_matches(title, job.title, job.description):
+        for job, available, published in self._search_index:
+            if not required or not required.issubset(available):
                 continue
             query_matched += 1
-            published = _parse_iso(job.posted_at)
             if not published or published < cutoff:
                 continue
             date_matched += 1

@@ -8,6 +8,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 from config import AGENT, LINKEDIN, STEALTH
 from collector.base import JobSource, RawJob
+from collector.query_matcher import query_matches
 
 _SEARCH_URL = LINKEDIN["search_url"]
 
@@ -110,7 +111,8 @@ class LinkedInSource(JobSource):
         )
         self._goto(url)
         self._wait()
-        return self._collect_cards(max_jobs=max_results, known_urls=known_urls)
+        cards = self._collect_cards(max_jobs=max_results, known_urls=known_urls)
+        return [card for card in cards if query_matches(title, card.title)]
 
     def fetch_description(self, url: str) -> str | None:
         self._jitter_mouse()

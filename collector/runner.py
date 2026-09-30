@@ -141,12 +141,7 @@ _POLAND_CITIES = frozenset({
 
 def _locations_for_source(source_id: str, locations: list[str], work_country: str | None = None) -> list[str]:
     if source_id == "linkedin":
-        if not work_country:
-            return locations
-        values = [work_country]
-        if work_country.strip().casefold() in _POLAND_ALIASES:
-            values.extend(["Europe", "EMEA", "Worldwide"])
-        return values
+        return [work_country] if work_country else locations
     if source_id in _WORLDWIDE_REMOTE_SOURCES:
         return [work_country] if work_country else (locations if locations else ["Remote"])
     if source_id in _POLAND_ONLY_SOURCES:
@@ -184,6 +179,7 @@ def _search_pause_seconds(new_count: int) -> float:
 # after them (including every Poland-focused board) of a single real search,
 # every run, since the per-country expansion landed (2026-08-02).
 _MAX_TOTAL_SEARCHES = 150
+_MAX_QUERIES_PER_SOURCE = 6
 
 
 def _collect_job_cards(
@@ -196,6 +192,7 @@ def _collect_job_cards(
     rejected_kw: list[str],
     session_id: int,
     work_country: str | None = None,
+    max_jobs_per_source: int | None = None,
 ) -> tuple[int, int, list[tuple[str, str, str]]]:
     jobs_found = 0
     jobs_new = 0
@@ -235,6 +232,7 @@ def _collect_job_cards(
                             if q in excluded:
                                 logger.info(f"  [prune] Skipping LinkedIn query {q!r} (auto-excluded: {excluded[q]})")
                         queries_for_source = [q for q in queries_for_source if q.original not in excluded]
+                queries_for_source = queries_for_source[:_MAX_QUERIES_PER_SOURCE]
 
                 # Fair-share budgets instead of first-come-first-served, so the
                 # first source/query can't consume the whole max_jobs budget.
@@ -243,6 +241,8 @@ def _collect_job_cards(
                     math.ceil((max_jobs - jobs_new) / remaining_sources)
                     if max_jobs is not None else None
                 )
+                if max_jobs_per_source is not None:
+                    source_budget = min(source_budget, max_jobs_per_source) if source_budget is not None else max_jobs_per_source
                 jobs_new_this_source = 0
                 source_searches = 0
                 source_cap_hit = False
@@ -365,6 +365,7 @@ def run(
     search_queries_override: list[str] | None = None,
     source_ids: list[str] | None = None,
     session_id: int | None = None,
+    max_jobs_per_source: int | None = None,
 ) -> dict:
     criteria = criteria_repository.get_active_dict()
     preferences = candidate_preferences_repository.get_active() or {}
@@ -409,12 +410,14 @@ def run(
 
     try:
         known_urls = job_repository.get_all_urls()
+        urls_before_run = set(known_urls)
         logger.info(f"Loaded {len(known_urls)} known URLs for early-stop deduplication.")
 
         rejected_kw = [r.lower() for r in criteria["rejected"]]
         jobs_found, jobs_new, jobs_pending_description = _collect_job_cards(
             selected_sources, search_queries, criteria["locations"],
             days_back, max_jobs, known_urls, rejected_kw, session_id, work_country,
+            max_jobs_per_source,
         )
 
         if jobs_pending_description:
@@ -426,7 +429,7 @@ def run(
 
         # Fetched once and shared, both filters used to independently pull the
         # entire 'new' pool (full descriptions included) over HTTP every run.
-        new_jobs = job_repository.get_new()
+        new_jobs = [job for job in job_repository.get_new() if job.get("url") not in urls_before_run]
 
         logger.info("\n=== LANGUAGE FILTER ===")
         lang_result = apply_language_filter(new_jobs)
@@ -454,7 +457,11 @@ def run(
         logger.info("\n" + "=" * 50)
         logger.info(f"Done. Found: {jobs_found}  New: {jobs_new}")
 
-        return {"jobs_found": jobs_found, "jobs_new": jobs_new}
+        return {
+            "jobs_found": jobs_found,
+            "jobs_new": jobs_new,
+            "job_ids": [job["id"] for job in new_jobs],
+        }
 
     except Exception as e:
         if owns_session:
@@ -472,6 +479,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Collect job listings")
     parser.add_argument("--days",           type=int,  default=7,    help="Days back to search (default: 7)")
     parser.add_argument("--max-jobs",       type=int,  default=None, help="Max new jobs to collect (default: unlimited)")
+    parser.add_argument("--max-jobs-per-source", type=int, default=None, help="Max new jobs from each source")
     parser.add_argument("--titles",         nargs="*", default=None, help="Override job titles (scoring only)")
     parser.add_argument("--locations",      nargs="*", default=None, help="Override search locations")
     parser.add_argument("--search-queries", nargs="*", default=None, help="Override search queries")
@@ -484,6 +492,7 @@ if __name__ == "__main__":
         max_jobs=args.max_jobs,
         titles=args.titles,
         locations=args.locations,
+        max_jobs_per_source=args.max_jobs_per_source,
         search_queries_override=args.search_queries,
         source_ids=args.sources,
         session_id=args.session_id,

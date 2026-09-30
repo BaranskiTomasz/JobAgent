@@ -17,7 +17,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from collector.runner import run as collect
-from db.repositories import session_repository, usage_repository
+from db.repositories import job_repository, session_repository, usage_repository
 from evaluator.runner import run as evaluate
 from extractor.runner import run_extraction
 
@@ -65,10 +65,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run full JobAgent pipeline: collect then evaluate")
     parser.add_argument("--days",           type=int,  default=None, help="Days back to search (default: since the last successful collection, like the dashboard)")
     parser.add_argument("--max-jobs",       type=int,  default=None, help="Max new jobs to collect (default: unlimited)")
+    parser.add_argument("--max-jobs-per-source", type=int, default=None, help="Max new jobs from each source")
     parser.add_argument("--titles",         nargs="*", default=None, help="Override job titles (scoring only)")
     parser.add_argument("--search-queries", nargs="*", default=None, help="Override LinkedIn search queries")
     parser.add_argument("--locations",      nargs="*", default=None, help="Override search locations")
     parser.add_argument("--log-file",       default=None,            help="Append output to this file (e.g. data/logs/run.log)")
+    parser.add_argument("--skip-ranking",   action="store_true",     help="Skip embeddings and ranking")
     args = parser.parse_args()
 
     handlers = _configure_logging(args.log_file)
@@ -96,6 +98,7 @@ def main() -> int:
                 titles=args.titles,
                 search_queries_override=args.search_queries,
                 locations=args.locations,
+                max_jobs_per_source=args.max_jobs_per_source,
             )
         except Exception as e:
             logger.error(f"Collector failed: {e}")
@@ -113,9 +116,9 @@ def main() -> int:
         # Must precede EVALUATOR, dealbreakers.py reads structured_data, and a job
         # never re-enters the unscored pool once scored.
         logger.info("\n=== EXTRACTOR ===")
+        collected_ids = set(c_result.get("job_ids") or [])
         try:
-            from db.repositories import job_repository as _jr
-            new_jobs = _jr.get_new_with_descriptions()
+            new_jobs = [job for job in job_repository.get_new_with_descriptions() if job["id"] in collected_ids]
             extracted = run_extraction(new_jobs)
             logger.info(f"Extractor result: structured_data updated for {extracted} job(s)")
         except Exception as e:
@@ -123,7 +126,8 @@ def main() -> int:
 
         logger.info("\n=== EVALUATOR ===")
         try:
-            e_result = evaluate()
+            evaluation_jobs = [job for job in job_repository.get_new_with_descriptions() if job["id"] in collected_ids]
+            e_result = evaluate(jobs=evaluation_jobs) if evaluation_jobs else {"jobs_scored": 0}
         except Exception as e:
             logger.error(f"Evaluator failed: {e}")
             return 1
@@ -134,9 +138,12 @@ def main() -> int:
         if _run_script("prune_search_queries.py") != 0:
             logger.warning("Search query pruning failed (non-fatal)")
 
-        logger.info("\n=== EMBEDDINGS + RANKING ===")
-        if _run_script("rank_jobs.py") != 0:
-            logger.warning("Ranking failed (non-fatal)")
+        if args.skip_ranking:
+            logger.info("\n=== EMBEDDINGS + RANKING ===\nSkipped by --skip-ranking")
+        else:
+            logger.info("\n=== EMBEDDINGS + RANKING ===")
+            if _run_script("rank_jobs.py") != 0:
+                logger.warning("Ranking failed (non-fatal)")
 
         logger.info("\n" + "=" * 60)
         logger.info("Run complete.")
