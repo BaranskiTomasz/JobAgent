@@ -21,6 +21,11 @@ def _structured_data(job: dict) -> dict:
         return {}
 
 
+def _trusted_fields(data: dict) -> dict:
+    confidence = data.get("_field_confidence") or {}
+    return {key: value for key, value in data.items() if confidence.get(key) == "high"}
+
+
 # Standard full-time B2B assumption for converting an hourly rate to its annual
 # equivalent: 168 hours/month (21 working days x 8h) x 12 months.
 _HOURS_PER_YEAR = 168 * 12
@@ -94,7 +99,7 @@ def _remote_only_reason(job_structured: dict, work_mode: list[str]) -> str | Non
     return None
 
 
-def _geo_reason(job_structured: dict, work_mode: list[str], remote_countries: list[str]) -> str | None:
+def _geo_reason(job_structured: dict, work_mode: list[str], work_countries: list[str]) -> str | None:
     # A job can be genuinely remote but still restricted to countries that
     # don't include the candidate's (e.g. "Remote, US only" reaching a
     # candidate in Poland). Conservative like the checks below: any
@@ -102,7 +107,7 @@ def _geo_reason(job_structured: dict, work_mode: list[str], remote_countries: li
     # is a new field and older jobs have no such key at all.
     if "remote" not in work_mode:
         return None
-    if not remote_countries:
+    if not work_countries:
         return None  # candidate didn't say which countries matter, nothing to check
     if job_structured.get("remote") is not True:
         return None  # not a remote posting at all, a different dealbreaker's job
@@ -115,11 +120,11 @@ def _geo_reason(job_structured: dict, work_mode: list[str], remote_countries: li
     # same way real free-text job locations do, this list is otherwise just
     # joined country/region names, not a sentence.
     job_location_text = ", ".join(job_regions) + " "
-    if any(location_matches(job_location_text, country) for country in remote_countries):
+    if any(location_matches(job_location_text, country) for country in work_countries):
         return None
     return (
         f"Dealbreaker: remote work restricted to {', '.join(job_regions)}, "
-        f"not available for your selected countries ({', '.join(remote_countries)})"
+        f"not available from where you work ({', '.join(work_countries)})"
     )
 
 
@@ -231,9 +236,20 @@ def apply_dealbreaker_filter(jobs: list[dict]) -> tuple[list[dict], dict]:
     salary_min = prefs.get("salary_min")
     salary_currency = prefs.get("salary_currency")
     work_mode = prefs.get("work_mode") or []
-    remote_countries = prefs.get("remote_countries") or []
-    seniority_levels = prefs.get("seniority_levels") or []
-    preferred_company_types = prefs.get("preferred_company_types") or []
+    work_country = (prefs.get("work_country") or "").strip()
+    remote_countries = [work_country] if work_country else (prefs.get("remote_countries") or [])
+    required_seniority = prefs.get("required_seniority_levels")
+    seniority_levels = (
+        prefs.get("seniority_levels") or []
+        if required_seniority is None
+        else required_seniority
+    )
+    required_company_types = prefs.get("required_company_types")
+    preferred_company_types = (
+        prefs.get("preferred_company_types") or []
+        if required_company_types is None
+        else required_company_types
+    )
     # Unset (predates this field) defaults to True, matching the questionnaire
     # checkbox's own default (checked), never surprise an existing candidate
     # with newly-hidden postings just because this key doesn't exist yet.
@@ -252,19 +268,20 @@ def apply_dealbreaker_filter(jobs: list[dict]) -> tuple[list[dict], dict]:
 
     for job in jobs:
         structured = _structured_data(job)
-        reason = _salary_floor_reason(structured, salary_min, salary_currency)
+        trusted = _trusted_fields(structured)
+        reason = _salary_floor_reason(trusted, salary_min, salary_currency)
         if not reason:
-            reason = _remote_only_reason(structured, work_mode)
+            reason = _remote_only_reason(trusted, work_mode)
         if not reason:
-            reason = _geo_reason(structured, work_mode, remote_countries)
+            reason = _geo_reason(trusted, work_mode, remote_countries)
         if not reason:
-            reason = _seniority_reason(structured, seniority_levels)
+            reason = _seniority_reason(trusted, seniority_levels)
         if not reason:
-            reason = _company_type_reason(structured, preferred_company_types)
+            reason = _company_type_reason(trusted, preferred_company_types)
         if not reason:
-            reason = _working_language_reason(structured, candidate_language_codes)
-        if not reason:
-            reason = _no_salary_disclosed_reason(structured, show_jobs_without_salary)
+            reason = _working_language_reason(trusted, candidate_language_codes)
+        if not reason and "_salary_disclosed" in trusted:
+            reason = _no_salary_disclosed_reason(trusted, show_jobs_without_salary)
 
         if reason:
             job_repository.update_score_and_status(job["id"], 0.0, reason, "auto_rejected")

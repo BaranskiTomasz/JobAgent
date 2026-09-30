@@ -2,6 +2,7 @@ import uuid
 from contextlib import contextmanager
 from unittest.mock import patch
 from db.repositories import job_repository, candidate_preferences_repository
+from evaluator.fingerprints import score_fingerprint
 from evaluator.runner import run
 
 
@@ -14,7 +15,7 @@ def _unique_url(url: str) -> str:
 
 def _insert_scoreable(url="https://example.com/1", **kwargs):
     """Insert a job that has a description and is ready to be scored."""
-    defaults = dict(title="PHP Developer", company="Acme Corp",
+    defaults = dict(title="PHP Developer", company=f"Acme Corp {uuid.uuid4().hex}",
                     location="Poland", source="linkedin",
                     description="Symfony expertise required.")
     return job_repository.insert(**{**defaults, "url": _unique_url(url), **kwargs})
@@ -90,7 +91,8 @@ class TestEvaluatorRunner:
 
     def test_already_scored_job_not_rescored(self):
         job_id = _insert_scoreable()
-        job_repository.update_score(job_id, 6.0, "Already scored")
+        job = next(j for j in job_repository.search(status="all") if j["id"] == job_id)
+        job_repository.update_score(job_id, 6.0, "Already scored", fingerprint=score_fingerprint(job, "fake prompt"))
         with _patched_run() as mock_score:
             run()
         mock_score.assert_not_called()
@@ -160,9 +162,13 @@ class TestEvaluatorRunner:
         # dealbreaker-blind because extraction hadn't succeeded yet) used to sit
         # in the pool forever.
         job_id = _insert_scoreable()
-        job_repository.update_structured_data(job_id, {"seniority": "junior"})
+        job_repository.update_structured_data(job_id, {
+            "seniority": "junior", "_field_confidence": {"seniority": "high"},
+        })
         job_repository.update_score(job_id, 6.0, "scored before this seniority preference existed")
-        candidate_preferences_repository.insert(None, {"seniority_levels": ["senior"]})
+        candidate_preferences_repository.insert(None, {
+            "seniority_levels": ["senior"], "required_seniority_levels": ["senior"],
+        })
 
         with _patched_run() as mock_score:
             result = run()
@@ -174,9 +180,14 @@ class TestEvaluatorRunner:
 
     def test_previously_scored_job_left_alone_when_still_dealbreaker_clean(self):
         job_id = _insert_scoreable()
-        job_repository.update_structured_data(job_id, {"seniority": "senior"})
-        job_repository.update_score(job_id, 6.0, "still a fine match")
-        candidate_preferences_repository.insert(None, {"seniority_levels": ["senior"]})
+        job_repository.update_structured_data(job_id, {
+            "seniority": "senior", "_field_confidence": {"seniority": "high"},
+        })
+        candidate_preferences_repository.insert(None, {
+            "seniority_levels": ["senior"], "required_seniority_levels": ["senior"],
+        })
+        job = next(j for j in job_repository.search(status="all") if j["id"] == job_id)
+        job_repository.update_score(job_id, 6.0, "still a fine match", fingerprint=score_fingerprint(job, "fake prompt"))
 
         with _patched_run() as mock_score:
             result = run()
@@ -186,6 +197,28 @@ class TestEvaluatorRunner:
         job = next(j for j in job_repository.search(status="all") if j["id"] == job_id)
         assert job["status"] == "new"
         assert job["score"] == 6.0
+
+    def test_dealbreaker_rejected_job_returns_when_requirement_is_relaxed(self):
+        job_id = _insert_scoreable()
+        job_repository.update_structured_data(job_id, {
+            "seniority": "junior", "_field_confidence": {"seniority": "high"},
+        })
+        candidate_preferences_repository.insert(None, {
+            "required_seniority_levels": ["senior"],
+        })
+        with _patched_run() as mock_score:
+            first = run()
+        assert first["jobs_auto_rejected"] == 1
+        mock_score.assert_not_called()
+
+        candidate_preferences_repository.insert(None, {"required_seniority_levels": []})
+        with _patched_run(_good_score(score=8.0)):
+            second = run()
+
+        assert second["jobs_scored"] == 1
+        job = next(j for j in job_repository.search(status="all") if j["id"] == job_id)
+        assert job["status"] == "new"
+        assert job["score"] == 8.0
 
     def test_divergence_cases_capped_at_limit(self):
         _insert_scoreable()

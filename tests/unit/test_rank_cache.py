@@ -81,3 +81,13 @@ def test_genuine_result_with_no_debate_flag_at_all_is_still_reused():
     result = reuse_if_unchanged(listwise_pool, previous_jobs)
     assert result is not None
     assert [j["id"] for j in result] == ["a"]
+
+
+def test_changed_fingerprint_invalidates_cache():
+    pool = [{"id": "a", "listwise_rank": 1, "ranking_fingerprint": "old"}]
+    assert reuse_if_unchanged(pool, pool, "new") is None
+
+
+def test_matching_fingerprint_reuses_cache():
+    pool = [{"id": "a", "listwise_rank": 1, "ranking_fingerprint": "same"}]
+    assert reuse_if_unchanged(pool, pool, "same") is not None

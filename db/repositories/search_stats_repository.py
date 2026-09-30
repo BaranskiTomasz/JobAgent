@@ -1,10 +1,14 @@
 import api_client
 
 
-def record(session_id: int, source: str, search_query: str, location: str, cards_found: int, new_found: int) -> None:
+def record(session_id: int, source: str, search_query: str, location: str, cards_found: int, new_found: int,
+           upstream_found: int | None = None, query_matched: int | None = None,
+           date_matched: int | None = None, geo_matched: int | None = None) -> None:
     api_client.post("/api/search-stats", json={
         "session_id": session_id, "source": source, "search_query": search_query,
         "location": location, "cards_found": cards_found, "new_found": new_found,
+        "upstream_found": upstream_found, "query_matched": query_matched,
+        "date_matched": date_matched, "geo_matched": geo_matched,
     })
 
 

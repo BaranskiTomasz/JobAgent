@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(message)s")
 
 import api_client
 from db.repositories import job_repository, preference_repository
-from embeddings.indexer import score_pool_by_similarity, index_jobs
+from embeddings.indexer import embedding_text_hash, score_pool_by_similarity, index_jobs
 from ranker.fusion import fuse_by_rrf
 from ranker.reranker import rerank_jobs
 from ranker.listwise import listwise_rank
@@ -29,7 +29,8 @@ from ranker.rank_cache import reuse_if_unchanged
 from ranker.would_apply import compute_revocations, compute_would_apply
 from ranker.exploration import compute_non_exploration_ranks, pick_exploration_slots, tag_exploration_picks
 from evaluator.profile import load_active_profile, load_questionnaire_preferences, build_hyde_query
-from config import RANKING, EXPLORATION
+from evaluator.fingerprints import ranking_fingerprint
+from config import EXPLORATION, RANKING, VOYAGE_EMBED_MODEL
 
 try:
     candidate_profile = load_active_profile()
@@ -58,8 +59,14 @@ if len(jobs) == RANKING_POOL_LIMIT:
 print(f"Processing {len(jobs)} active job(s)...")
 
 # Step 1: Index any missing embeddings
-existing_ids = set(api_client.get("/api/embeddings/ids").json()["job_ids"])
-unindexed = [j for j in jobs if j["id"] not in existing_ids]
+embedding_metadata = api_client.get("/api/embeddings/metadata").json()
+unindexed = [
+    job for job in jobs
+    if embedding_metadata.get(job["id"]) != {
+        "model": VOYAGE_EMBED_MODEL,
+        "text_hash": embedding_text_hash(job),
+    }
+]
 if unindexed:
     print(f"\nIndexing {len(unindexed)} new embedding(s)...")
     indexed = index_jobs(unindexed)
@@ -134,7 +141,8 @@ if exploration_picks:
     listwise_pool = listwise_pool + exploration_picks
 exploration_ids = {j["id"] for j in exploration_picks}
 
-reused = reuse_if_unchanged(listwise_pool, jobs)
+current_ranking_fingerprint = ranking_fingerprint(listwise_pool, candidate_profile, questionnaire, preferences)
+reused = reuse_if_unchanged(listwise_pool, jobs, current_ranking_fingerprint)
 if reused is not None:
     if reused:
         print(f"\nTop-{len(reused)} candidate set unchanged since last run, reusing previous listwise + debate results")
@@ -187,6 +195,7 @@ ranking_items = [
         "rank_reason": job.get("rank_reason"),
         "debate_flag": job.get("debate_flag"),
         "debate_note": job.get("debate_note"),
+        "fingerprint": current_ranking_fingerprint,
     }
     for job in ranked
 ]
@@ -198,6 +207,7 @@ ranking_items += [
         "embedding_score": job.get("_embedding_score"),
         "rerank_score": job.get("rerank_score"),
         "listwise_rank": None,
+        "fingerprint": None,
     }
     for job in jobs_by_sim
     if job["id"] not in ranked_ids

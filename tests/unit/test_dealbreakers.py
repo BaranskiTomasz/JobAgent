@@ -5,6 +5,11 @@ from evaluator.dealbreakers import apply_dealbreaker_filter
 
 
 def _job(job_id="job1", structured=None, **overrides):
+    if structured is not None and "_field_confidence" not in structured:
+        structured = {
+            **structured,
+            "_field_confidence": {key: "high" for key, value in structured.items() if value not in (None, [], "unknown")},
+        }
     job = {
         "id": job_id, "title": "PHP Developer", "company": "Acme",
         "structured_data": json.dumps(structured) if structured is not None else None,
@@ -16,8 +21,8 @@ def _job(job_id="job1", structured=None, **overrides):
 def _prefs(**overrides):
     base = {
         "salary_min": None, "salary_currency": None, "work_mode": [],
-        "remote_countries": [], "seniority_levels": [], "show_jobs_without_salary": None,
-        "preferred_company_types": [], "languages": [],
+        "work_country": "", "remote_countries": [], "seniority_levels": [],
+        "show_jobs_without_salary": None, "preferred_company_types": [], "languages": [],
     }
     base.update(overrides)
     return base
@@ -31,6 +36,46 @@ class TestNoActivePreferences:
         surviving, stats = apply_dealbreaker_filter(jobs)
         assert surviving == jobs
         assert stats == {"checked": 2, "auto_rejected": 0}
+        mock_update.assert_not_called()
+
+
+class TestPreferenceStrengthAndConfidence:
+    @patch("evaluator.dealbreakers.job_repository.update_score_and_status")
+    @patch("evaluator.dealbreakers.candidate_preferences_repository.get_active")
+    def test_soft_seniority_and_company_preferences_do_not_reject(self, mock_prefs, mock_update):
+        mock_prefs.return_value = _prefs(
+            seniority_levels=["senior"],
+            required_seniority_levels=[],
+            preferred_company_types=["product"],
+            required_company_types=[],
+        )
+        job = _job(structured={"seniority": "mid", "product_vs_outsourcing": "outsourcing"})
+        surviving, stats = apply_dealbreaker_filter([job])
+        assert surviving == [job]
+        assert stats["auto_rejected"] == 0
+        mock_update.assert_not_called()
+
+    @patch("evaluator.dealbreakers.job_repository.update_score_and_status")
+    @patch("evaluator.dealbreakers.candidate_preferences_repository.get_active")
+    def test_work_country_not_employer_country_drives_remote_eligibility(self, mock_prefs, mock_update):
+        mock_prefs.return_value = _prefs(
+            work_mode=["remote"], work_country="Poland", employer_countries=["United States"]
+        )
+        job = _job(structured={"remote": True, "remote_regions": ["United States"]})
+        surviving, stats = apply_dealbreaker_filter([job])
+        assert surviving == []
+        assert stats["auto_rejected"] == 1
+
+    @patch("evaluator.dealbreakers.job_repository.update_score_and_status")
+    @patch("evaluator.dealbreakers.candidate_preferences_repository.get_active")
+    def test_legacy_untrusted_extraction_does_not_hard_reject(self, mock_prefs, mock_update):
+        mock_prefs.return_value = _prefs(work_mode=["remote"], work_country="Poland")
+        structured = {"remote": True, "remote_regions": ["United States"]}
+        job = _job(structured=structured)
+        job["structured_data"] = json.dumps(structured)
+        surviving, stats = apply_dealbreaker_filter([job])
+        assert surviving == [job]
+        assert stats["auto_rejected"] == 0
         mock_update.assert_not_called()
 
 
@@ -422,13 +467,13 @@ class TestNoSalaryDisclosed:
 
     @patch("evaluator.dealbreakers.job_repository.update_score_and_status")
     @patch("evaluator.dealbreakers.candidate_preferences_repository.get_active")
-    def test_rejects_undisclosed_salary_when_opted_out(self, mock_prefs, mock_update):
+    def test_unverified_undisclosed_salary_is_not_hard_rejected(self, mock_prefs, mock_update):
         mock_prefs.return_value = _prefs(show_jobs_without_salary=False)
         job = _job(structured={})
         surviving, stats = apply_dealbreaker_filter([job])
-        assert surviving == []
-        assert stats["auto_rejected"] == 1
-        assert "no salary disclosed" in mock_update.call_args[0][2]
+        assert surviving == [job]
+        assert stats["auto_rejected"] == 0
+        mock_update.assert_not_called()
 
     @patch("evaluator.dealbreakers.job_repository.update_score_and_status")
     @patch("evaluator.dealbreakers.candidate_preferences_repository.get_active")
@@ -461,12 +506,13 @@ class TestNoSalaryDisclosed:
 
     @patch("evaluator.dealbreakers.job_repository.update_score_and_status")
     @patch("evaluator.dealbreakers.candidate_preferences_repository.get_active")
-    def test_opted_out_check_runs_even_with_no_other_preference(self, mock_prefs, mock_update):
+    def test_unverified_missing_salary_survives_with_other_extracted_fields(self, mock_prefs, mock_update):
         mock_prefs.return_value = _prefs(show_jobs_without_salary=False)
         job = _job(structured={"seniority": "senior"})  # no salary fields at all
         surviving, stats = apply_dealbreaker_filter([job])
-        assert surviving == []
-        assert stats["auto_rejected"] == 1
+        assert surviving == [job]
+        assert stats["auto_rejected"] == 0
+        mock_update.assert_not_called()
 
 
 class TestCompanyTypeFilter:

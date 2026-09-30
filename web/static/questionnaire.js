@@ -238,17 +238,22 @@ async function savePreferences() {
   status.textContent = 'Saving…';
 
   const salaryMin = document.getElementById('salary-min').value;
+  const seniorityLevels = getToggledValues('seniority-group');
+  const companyTypes = getToggledValues('company-group');
 
   const fields = {
     work_mode: getToggledValues('workmode-group'),
-    remote_countries: getChipValues('country-chips'),
+    work_country: document.getElementById('work-country').value.trim(),
+    employer_countries: getChipValues('country-chips'),
     hybrid_cities: getChipValues('city-chips'),
     salary_min: salaryMin ? parseInt(salaryMin, 10) : null,
     salary_currency: document.getElementById('salary-currency').value,
     show_jobs_without_salary: document.getElementById('show-no-salary').checked ? 1 : 0,
-    seniority_levels: getToggledValues('seniority-group'),
+    seniority_levels: seniorityLevels,
+    required_seniority_levels: document.getElementById('seniority-hard').checked ? seniorityLevels : [],
     role_types: getToggledValues('role-group'),
-    preferred_company_types: getToggledValues('company-group'),
+    preferred_company_types: companyTypes,
+    required_company_types: document.getElementById('company-hard').checked ? companyTypes : [],
     extra_tech: getChipValues('tech-chips'),
     avoided_tech: getChipValues('avoid-chips'),
     languages: getLanguages(),
@@ -308,7 +313,12 @@ async function init() {
   const hasPrefs = prefs && Object.keys(prefs).length > 0;
 
   setToggled('workmode-group', hasPrefs ? prefs.work_mode : ['remote']);
-  (hasPrefs ? prefs.remote_countries : []).forEach(c => addChipValue('country-chips', c));
+  const detectedCountry = cv && cv.parsed ? (cv.parsed.location || '') : '';
+  const legacyWorkCountry = hasPrefs && (prefs.remote_countries || []).length === 1 ? prefs.remote_countries[0] : '';
+  document.getElementById('work-country').value = hasPrefs
+    ? (prefs.work_country || legacyWorkCountry || detectedCountry)
+    : detectedCountry;
+  (hasPrefs ? (prefs.employer_countries || []) : []).forEach(c => addChipValue('country-chips', c));
   (hasPrefs ? prefs.hybrid_cities : []).forEach(c => addChipValue('city-chips', c));
   updateWorkModePanels();
 
@@ -319,8 +329,10 @@ async function init() {
   }
 
   setToggled('seniority-group', hasPrefs ? prefs.seniority_levels : (cv && cv.parsed && cv.parsed.seniority ? [cv.parsed.seniority.toLowerCase()] : []));
+  document.getElementById('seniority-hard').checked = !!(hasPrefs && (prefs.required_seniority_levels || []).length);
   setToggled('role-group', hasPrefs ? prefs.role_types : []);
   setToggled('company-group', hasPrefs ? prefs.preferred_company_types : []);
+  document.getElementById('company-hard').checked = !!(hasPrefs && (prefs.required_company_types || []).length);
 
   const tech = hasPrefs ? (prefs.extra_tech || []) : (cv && cv.parsed ? (cv.parsed.stack || []) : []);
   tech.forEach(t => addChipValue('tech-chips', t));

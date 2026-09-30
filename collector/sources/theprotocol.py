@@ -33,6 +33,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 from collector.base import JobSource, RawJob
 from collector.location import workplace_suffix
+from collector.query_matcher import primary_query_token, query_matches
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +157,7 @@ class TheProtocolSource(JobSource):
         days = days_back if days_back is not None else self._days_back
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-        tag = title.strip().split()[0].lower() if title.strip() else ""
+        tag = primary_query_token(title)
         if not tag:
             return []
 
@@ -177,17 +178,18 @@ class TheProtocolSource(JobSource):
         # incremental run; deeper pagination isn't implemented yet.
 
         results: list[RawJob] = []
+        query_matched = 0
+        date_matched = 0
         for offer in offers:
-            if max_results and len(results) >= max_results:
-                break
 
             # The URL's tag no longer filters server-side (see module docstring),
             # so every offer has to be checked here regardless of which tag was
             # requested, or every query would return the same unfiltered top-50.
-            technologies = [t.lower() for t in (offer.get("technologies") or [])]
-            offer_title = (offer.get("title") or "").lower()
-            if not any(tag in t for t in technologies) and tag not in offer_title:
+            technologies = offer.get("technologies") or []
+            offer_title = offer.get("title") or ""
+            if not query_matches(title, offer_title, " ".join(technologies)):
                 continue
+            query_matched += 1
 
             offer_url_name = offer.get("offerUrlName")
             if not offer_url_name:
@@ -200,6 +202,7 @@ class TheProtocolSource(JobSource):
                 pub_dt = None
             if pub_dt and pub_dt < cutoff:
                 continue
+            date_matched += 1
 
             job_url = _DETAIL_URL.format(offer_url_name=offer_url_name)
             if known_urls and job_url in known_urls:
@@ -211,6 +214,8 @@ class TheProtocolSource(JobSource):
             modes.discard(None)
             location_str = f"{city}, Poland{workplace_suffix(modes)}" if city else f"Poland{workplace_suffix(modes)}"
 
+            if max_results and len(results) >= max_results:
+                continue
             results.append(RawJob(
                 title=offer.get("title", ""),
                 company=offer.get("employer", ""),
@@ -222,4 +227,8 @@ class TheProtocolSource(JobSource):
                 posted_at=pub_dt.isoformat() if pub_dt else None,
             ))
 
+        self.set_search_diagnostics(
+            upstream_found=len(offers), query_matched=query_matched,
+            date_matched=date_matched, geo_matched=date_matched,
+        )
         return results

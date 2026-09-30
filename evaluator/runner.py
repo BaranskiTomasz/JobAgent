@@ -9,6 +9,7 @@ from evaluation.harness import divergence_cases
 from evaluator.dealbreakers import apply_dealbreaker_filter
 from evaluator.scorer import score_job, build_system_prompt
 from evaluator.profile import load_active_profile, load_questionnaire_preferences
+from evaluator.fingerprints import score_fingerprint
 
 # Cap on how many past ranking mistakes get fed back into the scoring prompt, bounds
 # prompt size as more divergence cases accumulate over time.
@@ -25,7 +26,7 @@ def run(force_rescore: bool = False, jobs: list[dict] | None = None) -> dict:
         full_pool = jobs
         rescore_all = True
     elif force_rescore:
-        full_pool = job_repository.get_new_with_descriptions()
+        full_pool = job_repository.get_new_with_descriptions() + job_repository.get_dealbreaker_rejected_with_descriptions()
         if full_pool:
             logger.info(f"Force-rescore mode: {len(full_pool)} job(s) will be re-scored.")
         rescore_all = True
@@ -35,23 +36,28 @@ def run(force_rescore: bool = False, jobs: list[dict] | None = None) -> dict:
         # already scored before extraction filled in structured_data or the
         # questionnaire changed. The LLM-scoring loop below still only
         # processes jobs that genuinely have no score yet.
-        full_pool = job_repository.get_new_with_descriptions()
+        full_pool = job_repository.get_new_with_descriptions() + job_repository.get_dealbreaker_rejected_with_descriptions()
         rescore_all = False
 
     if not full_pool:
         logger.info("No jobs to evaluate.")
         return {"jobs_scored": 0}
 
+    previously_dealbreaker_rejected = {
+        job["id"] for job in full_pool
+        if job.get("status") == "auto_rejected" and (job.get("score_reason") or "").startswith("Dealbreaker:")
+    }
     surviving, dealbreaker_stats = apply_dealbreaker_filter(full_pool)
+    for job in surviving:
+        if job["id"] in previously_dealbreaker_rejected:
+            job_repository.update_score_and_status(job["id"], None, "", "new", None, None)
+            job["status"] = "new"
+            job["score"] = None
+            job["score_fingerprint"] = None
     if dealbreaker_stats["auto_rejected"]:
         logger.info(f"Dealbreaker filter: auto-rejected {dealbreaker_stats['auto_rejected']}/{dealbreaker_stats['checked']} job(s) before scoring")
     if not surviving:
         logger.info("No jobs left to evaluate after dealbreaker filter.")
-        return {"jobs_scored": 0, "jobs_auto_rejected": dealbreaker_stats["auto_rejected"]}
-
-    unscored_jobs = surviving if rescore_all else [j for j in surviving if j.get("score") is None]
-    if not unscored_jobs:
-        logger.info("No jobs left to score after dealbreaker filter.")
         return {"jobs_scored": 0, "jobs_auto_rejected": dealbreaker_stats["auto_rejected"]}
 
     try:
@@ -80,6 +86,15 @@ def run(force_rescore: bool = False, jobs: list[dict] | None = None) -> dict:
         divergence_cases=calibration_cases, questionnaire=questionnaire,
     )
 
+    fingerprints = {job["id"]: score_fingerprint(job, shared_system_prompt) for job in surviving}
+    unscored_jobs = surviving if rescore_all else [
+        job for job in surviving
+        if job.get("score") is None or job.get("score_fingerprint") != fingerprints[job["id"]]
+    ]
+    if not unscored_jobs:
+        logger.info("No jobs left to score after dealbreaker filter.")
+        return {"jobs_scored": 0, "jobs_auto_rejected": dealbreaker_stats["auto_rejected"]}
+
     logger.info(f"Evaluating {len(unscored_jobs)} job(s)...")
     if learned_preferences:
         logger.info(f"Preference profile active ({latest_preference['applied_count']} applied, {latest_preference['rejected_count']} rejected)")
@@ -102,12 +117,12 @@ def run(force_rescore: bool = False, jobs: list[dict] | None = None) -> dict:
 
         if result["score"] <= auto_reject_threshold:
             job_repository.update_score_and_status(
-                job["id"], result["score"], result["score_reason"], "auto_rejected", result.get("breakdown")
+                job["id"], result["score"], result["score_reason"], "auto_rejected", result.get("breakdown"), fingerprints[job["id"]]
             )
             jobs_auto_rejected += 1
             logger.info(f"  Score: {result['score']}/10, auto-rejected, {result['score_reason']}")
         else:
-            job_repository.update_score(job["id"], result["score"], result["score_reason"], result.get("breakdown"))
+            job_repository.update_score(job["id"], result["score"], result["score_reason"], result.get("breakdown"), fingerprints[job["id"]])
             logger.info(f"  Score: {result['score']}/10, {result['score_reason']}")
 
         jobs_scored += 1

@@ -109,7 +109,7 @@ def _extract_source_structured_data(offer: dict) -> dict:
     check: skip a field entirely rather than write a value outside the
     extraction schema's own enum (e.g. an unsupported currency, or a
     non-standard salary unit)."""
-    data: dict = {}
+    data: dict = {"_salary_disclosed": False}
 
     seniority = offer.get("experienceLevel")
     if seniority in _KNOWN_SENIORITY_LEVELS:
@@ -129,6 +129,7 @@ def _extract_source_structured_data(offer: dict) -> dict:
         if period and currency in _KNOWN_SALARY_CURRENCIES and salary_from and salary_to:
             data["salary_min"] = round(salary_from)
             data["salary_max"] = round(salary_to)
+            data["_salary_disclosed"] = True
             data["salary_currency"] = currency
             data["salary_period"] = period
 

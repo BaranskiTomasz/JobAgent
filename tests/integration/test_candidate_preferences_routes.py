@@ -86,6 +86,16 @@ class TestSavePreferences:
         assert set(locations) == {"Poland", "Germany"}
 
     @patch("web.routes.candidate_preferences.anthropic.Anthropic")
+    def test_work_country_drives_remote_eligibility_location(self, mock_anthropic, flask_client):
+        mock_anthropic.return_value.messages.create.return_value = _mock_claude_response("[]")
+        flask_client.post("/api/candidate-preferences", json={
+            "work_mode": ["remote"],
+            "work_country": "Poland",
+            "employer_countries": ["United States", "United Kingdom"],
+        })
+        assert criteria_repository.get_active("location") == ["Poland"]
+
+    @patch("web.routes.candidate_preferences.anthropic.Anthropic")
     def test_onsite_work_mode_uses_cities_not_countries(self, mock_anthropic, flask_client):
         mock_anthropic.return_value.messages.create.return_value = _mock_claude_response("[]")
         flask_client.post("/api/candidate-preferences", json={

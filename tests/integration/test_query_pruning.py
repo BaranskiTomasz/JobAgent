@@ -104,11 +104,11 @@ class TestPruneQueriesRejectRate:
 
 
 class TestPruneQueriesZeroYield:
-    def test_excludes_query_that_never_finds_anything_new(self, monkeypatch):
+    def test_excludes_query_that_never_returns_cards(self, monkeypatch):
         monkeypatch.setitem(config.QUERY_PRUNING, "min_searches_for_zero_yield", 5)
         session_id = session_repository.start()
         for _ in range(5):
-            search_stats_repository.record(session_id, "linkedin", "Redundant Query", "Austria", cards_found=4, new_found=0)
+            search_stats_repository.record(session_id, "linkedin", "Redundant Query", "Austria", cards_found=0, new_found=0)
 
         result = prune_queries("linkedin")
 

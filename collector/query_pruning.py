@@ -76,7 +76,7 @@ def prune_queries(source: str | None = None) -> list[dict]:
     for query in search_stats_repository.get_zero_yield_queries(source, min_searches):
         if query in already:
             continue
-        reason = f"found zero new jobs across {min_searches}+ searches (pure duplicate redundancy)"
+        reason = f"returned zero eligible matches across {min_searches}+ searches"
         excluded_search_queries_repository.exclude(source, query, reason)
         excluded_now.append({"search_query": query, "reason": reason})
 

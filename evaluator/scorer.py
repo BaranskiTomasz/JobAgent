@@ -39,7 +39,7 @@ def _build_examples_section(positive: list[dict], negative: list[dict]) -> str:
         lines.append("EXAMPLES OF JOBS I REJECTED (learn what to avoid):")
         for ex in negative:
             desc = build_excerpt(ex.get("description"), ex.get("source"))[:_EXAMPLE_DESC_LIMIT].replace("\n", " ")
-            reason = (ex.get("rejection_reason") or ex.get("score_reason") or "")[:_EXAMPLE_REASON_LIMIT]
+            reason = (ex.get("rejection_reason") or "")[:_EXAMPLE_REASON_LIMIT]
             reason_str = f" [My reason: {reason}]" if reason else ""
             lines.append(f'- "{ex["title"]}" @ {ex["company"]}: {desc}...{reason_str}')
         lines.append("")
@@ -110,7 +110,7 @@ def _build_calibration_section(divergence_cases: list[dict]) -> str:
     lines = []
     for case in divergence_cases:
         if case.get("divergence_type") == "false_positive":
-            reason = (case.get("rejection_reason") or case.get("score_reason") or "").strip()
+            reason = (case.get("rejection_reason") or "").strip()
             reason_str = f", reason: \"{reason}\"" if reason else ""
             lines.append(f'- Ranked #{case["listwise_rank"]} but candidate rejected: "{case["title"]}"{reason_str}')
         elif case.get("divergence_type") == "false_negative":

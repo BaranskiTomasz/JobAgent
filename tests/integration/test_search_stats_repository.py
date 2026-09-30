@@ -11,6 +11,19 @@ class TestRecord:
         assert summary[0]["total_searches"] == 1
         assert summary[0]["total_new_found"] == 2
 
+    def test_retrieval_funnel_is_queryable_via_summary(self):
+        session_id = session_repository.start()
+        search_stats_repository.record(
+            session_id, "jobscollider", "Backend Engineer", "Poland",
+            cards_found=10, new_found=4, upstream_found=100,
+            query_matched=80, date_matched=30, geo_matched=12,
+        )
+        row = search_stats_repository.get_query_summary("jobscollider")[0]
+        assert row["upstream_found"] == 100
+        assert row["query_matched"] == 80
+        assert row["date_matched"] == 30
+        assert row["geo_matched"] == 12
+
     def test_zero_cards_counted_as_zero_result_search(self):
         session_id = session_repository.start()
         search_stats_repository.record(session_id, "linkedin", "Full Stack Python Developer", "Austria", cards_found=0, new_found=0)
@@ -62,27 +75,27 @@ class TestGetQuerySummary:
 
 
 class TestGetZeroYieldQueries:
-    def test_flags_query_with_zero_new_across_min_searches(self):
+    def test_flags_query_with_zero_cards_across_min_searches(self):
         session_id = session_repository.start()
         for _ in range(5):
-            search_stats_repository.record(session_id, "linkedin", "Dead Query", "Austria", cards_found=3, new_found=0)
+            search_stats_repository.record(session_id, "linkedin", "Dead Query", "Austria", cards_found=0, new_found=0)
         assert search_stats_repository.get_zero_yield_queries("linkedin", min_searches=5) == ["Dead Query"]
 
     def test_below_min_searches_not_flagged(self):
         session_id = session_repository.start()
         for _ in range(4):
-            search_stats_repository.record(session_id, "linkedin", "Dead Query", "Austria", cards_found=3, new_found=0)
+            search_stats_repository.record(session_id, "linkedin", "Dead Query", "Austria", cards_found=0, new_found=0)
         assert search_stats_repository.get_zero_yield_queries("linkedin", min_searches=5) == []
 
-    def test_any_nonzero_new_found_excludes_query(self):
+    def test_any_returned_cards_exclude_query(self):
         session_id = session_repository.start()
         for _ in range(4):
-            search_stats_repository.record(session_id, "linkedin", "Good Query", "Austria", cards_found=3, new_found=0)
-        search_stats_repository.record(session_id, "linkedin", "Good Query", "Belgium", cards_found=2, new_found=1)
+            search_stats_repository.record(session_id, "linkedin", "Good Query", "Austria", cards_found=0, new_found=0)
+        search_stats_repository.record(session_id, "linkedin", "Good Query", "Belgium", cards_found=2, new_found=0)
         assert search_stats_repository.get_zero_yield_queries("linkedin", min_searches=5) == []
 
     def test_scoped_by_source(self):
         session_id = session_repository.start()
         for _ in range(5):
-            search_stats_repository.record(session_id, "remotive", "Dead Query", "Austria", cards_found=3, new_found=0)
+            search_stats_repository.record(session_id, "remotive", "Dead Query", "Austria", cards_found=0, new_found=0)
         assert search_stats_repository.get_zero_yield_queries("linkedin", min_searches=5) == []

@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import time
 
@@ -29,6 +30,10 @@ def _job_to_text(job: dict) -> str:
     if excerpt:
         parts.append(excerpt[:2000])
     return "\n".join(parts)
+
+
+def embedding_text_hash(job: dict) -> str:
+    return hashlib.sha256(_job_to_text(job).encode()).hexdigest()
 
 
 def _embed_with_retry(client: VoyageClient, texts: list[str], max_retries: int = 6) -> list:
@@ -63,8 +68,9 @@ def index_jobs(jobs: list[dict]) -> int:
 
         api_client.post("/api/embeddings", json={
             "items": [
-                {"job_id": job["id"], "embedding": emb, "model": VOYAGE_EMBED_MODEL}
-                for job, emb in zip(batch, embeddings)
+                {"job_id": job["id"], "embedding": emb, "model": VOYAGE_EMBED_MODEL,
+                 "text_hash": hashlib.sha256(text.encode()).hexdigest()}
+                for job, text, emb in zip(batch, texts, embeddings)
             ],
         })
         indexed += len(batch)
@@ -108,7 +114,7 @@ def score_pool_by_similarity(job_ids: list[str], candidate_profile: str | None =
     if not job_ids:
         return {}, None
 
-    vectors = api_client.get("/api/embeddings/decision-vectors").json()
+    vectors = api_client.get("/api/embeddings/decision-vectors", params={"model": VOYAGE_EMBED_MODEL}).json()
     applied_vecs = vectors["applied"]
 
     if not applied_vecs:

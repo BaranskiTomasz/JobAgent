@@ -100,10 +100,9 @@ class LinkedInSource(JobSource):
     def search(self, title: str, location: str, days_back: int | None = None, max_results: int | None = None, known_urls: set[str] | None = None) -> list[RawJob]:
         days = days_back if days_back is not None else self._days_back
         seconds = days * 24 * 3600
-        exact_phrase = f'"{title}"'  # quoted phrase, LinkedIn otherwise matches loosely on individual words
         url = (
             f"{_SEARCH_URL}"
-            f"?keywords={quote(exact_phrase)}"
+            f"?keywords={quote(title)}"
             f"&location={quote(location)}"
             f"&f_WT=2"
             f"&f_TPR=r{seconds}"

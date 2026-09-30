@@ -221,14 +221,14 @@ def pipeline_fixtures():
             criteria_repository.insert(criteria_type, value)
 
 
-def _get_job_score(url: str) -> float:
-    jobs = {j["url"]: j for j in job_repository.search()}
-    return jobs[url]["score"]
+def _get_job_score(job_id: str) -> float:
+    jobs = {j["id"]: j for j in job_repository.search()}
+    return jobs[job_id]["score"]
 
 
-def _get_job_status(url: str) -> str:
-    jobs = {j["url"]: j for j in job_repository.search()}
-    return jobs[url]["status"]
+def _get_job_status(job_id: str) -> str:
+    jobs = {j["id"]: j for j in job_repository.search()}
+    return jobs[job_id]["status"]
 
 
 # ---------------------------------------------------------------------------
@@ -238,16 +238,16 @@ class TestE2Filter:
     def test_job_without_required_keywords_gets_auto_rejected(self):
         # Missing every 'required' keyword (php, remote) in both title and description
         # is a hard rejection, see collector/filters.py::apply_keyword_filter.
-        job_repository.insert(**_JOB_E2_NO_REQUIRED_KEYWORDS)
+        job_id = job_repository.insert(**_JOB_E2_NO_REQUIRED_KEYWORDS)
         result = apply_keyword_filter()
         assert result["auto_rejected"] == 1
-        assert _get_job_status(_JOB_E2_NO_REQUIRED_KEYWORDS["url"]) == "auto_rejected"
+        assert _get_job_status(job_id) == "auto_rejected"
 
     def test_rejects_job_with_rejected_keyword(self):
-        job_repository.insert(**_JOB_E2_REJECTED_KEYWORD)
+        job_id = job_repository.insert(**_JOB_E2_REJECTED_KEYWORD)
         result = apply_keyword_filter()
         assert result["auto_rejected"] == 1
-        assert _get_job_status(_JOB_E2_REJECTED_KEYWORD["url"]) == "auto_rejected"
+        assert _get_job_status(job_id) == "auto_rejected"
 
 
 # ---------------------------------------------------------------------------
@@ -255,25 +255,25 @@ class TestE2Filter:
 # ---------------------------------------------------------------------------
 class TestE3Scoring:
     def test_great_linkedin_job_scores_high(self):
-        job_repository.insert(**_JOB_E3_LINKEDIN_GREAT)
+        job_id = job_repository.insert(**_JOB_E3_LINKEDIN_GREAT)
         run_evaluator()
-        score = _get_job_score(_JOB_E3_LINKEDIN_GREAT["url"])
+        score = _get_job_score(job_id)
         assert score >= 7, f"Expected score >= 7 for great LinkedIn job, got {score}"
 
     def test_poor_linkedin_job_scores_low(self):
-        job_repository.insert(**_JOB_E3_LINKEDIN_POOR)
+        job_id = job_repository.insert(**_JOB_E3_LINKEDIN_POOR)
         run_evaluator()
-        score = _get_job_score(_JOB_E3_LINKEDIN_POOR["url"])
+        score = _get_job_score(job_id)
         assert score <= 4, f"Expected score <= 4 for poor LinkedIn job, got {score}"
 
     def test_great_remoteok_job_scores_high(self):
-        job_repository.insert(**_JOB_E3_REMOTEOK_GREAT)
+        job_id = job_repository.insert(**_JOB_E3_REMOTEOK_GREAT)
         run_evaluator()
-        score = _get_job_score(_JOB_E3_REMOTEOK_GREAT["url"])
+        score = _get_job_score(job_id)
         assert score >= 7, f"Expected score >= 7 for great RemoteOK job, got {score}"
 
     def test_poor_remoteok_job_scores_low(self):
-        job_repository.insert(**_JOB_E3_REMOTEOK_POOR)
+        job_id = job_repository.insert(**_JOB_E3_REMOTEOK_POOR)
         run_evaluator()
-        score = _get_job_score(_JOB_E3_REMOTEOK_POOR["url"])
+        score = _get_job_score(job_id)
         assert score <= 4, f"Expected score <= 4 for poor RemoteOK job, got {score}"

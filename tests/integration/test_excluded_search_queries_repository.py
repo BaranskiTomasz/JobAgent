@@ -1,3 +1,6 @@
+import pytest
+
+import api_client
 from db.repositories import excluded_search_queries_repository as repo
 
 
@@ -37,5 +40,7 @@ class TestReinstate:
         repo.reinstate(id_)
         assert repo.get_excluded("linkedin") == {}
 
-    def test_reinstating_unknown_id_is_a_noop(self):
-        repo.reinstate(999)  # should not raise
+    def test_reinstating_unknown_id_raises_404(self):
+        with pytest.raises(api_client.ApiError) as exc_info:
+            repo.reinstate(999)
+        assert exc_info.value.status_code == 404

@@ -215,19 +215,19 @@ class TestNoFluffJobsSearch:
 class TestExtractSourceStructuredData:
     def test_extracts_salary_as_monthly(self):
         data = _extract_source_structured_data({"salary": {"from": 13000, "to": 15000, "currency": "PLN"}})
-        assert data == {"salary_min": 13000, "salary_max": 15000, "salary_currency": "PLN", "salary_period": "monthly"}
+        assert data == {"salary_min": 13000, "salary_max": 15000, "salary_currency": "PLN", "salary_period": "monthly", "_salary_disclosed": True}
 
     def test_undisclosed_salary_returns_empty(self):
         # NoFluffJobs omits from/to entirely when salary is only shown "at first
         # interview", never fabricate a range.
-        assert _extract_source_structured_data({"salary": {"type": "b2b", "currency": "PLN"}}) == {}
+        assert _extract_source_structured_data({"salary": {"type": "b2b", "currency": "PLN"}}) == {"_salary_disclosed": False}
 
     def test_missing_salary_block_returns_empty(self):
-        assert _extract_source_structured_data({}) == {}
+        assert _extract_source_structured_data({}) == {"_salary_disclosed": False}
 
     def test_unsupported_currency_skipped(self):
         data = _extract_source_structured_data({"salary": {"from": 1000, "to": 2000, "currency": "JPY"}})
-        assert data == {}
+        assert data == {"_salary_disclosed": False}
 
 
 class TestNoFluffJobsFetchDescription:

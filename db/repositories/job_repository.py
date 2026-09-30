@@ -43,17 +43,17 @@ def update_description(job_id: str, description: str) -> None:
     api_client.patch(f"/api/jobs/{job_id}/description", json={"description": description})
 
 
-def update_score(job_id: str, score: float, reason: str, breakdown: dict | None = None) -> None:
-    api_client.patch(f"/api/jobs/{job_id}/score", json={"score": score, "reason": reason, "breakdown": breakdown})
+def update_score(job_id: str, score: float, reason: str, breakdown: dict | None = None, fingerprint: str | None = None) -> None:
+    api_client.patch(f"/api/jobs/{job_id}/score", json={"score": score, "reason": reason, "breakdown": breakdown, "fingerprint": fingerprint})
 
 
 def update_status(job_id: str, status: str, rejection_reason: str | None = None) -> None:
     api_client.patch(f"/api/jobs/{job_id}/status", json={"status": status, "rejection_reason": rejection_reason})
 
 
-def update_score_and_status(job_id: str, score: float, reason: str, status: str, breakdown: dict | None = None) -> None:
+def update_score_and_status(job_id: str, score: float | None, reason: str, status: str, breakdown: dict | None = None, fingerprint: str | None = None) -> None:
     api_client.patch(f"/api/jobs/{job_id}/score-and-status", json={
-        "score": score, "reason": reason, "status": status, "breakdown": breakdown,
+        "score": score, "reason": reason, "status": status, "breakdown": breakdown, "fingerprint": fingerprint,
     })
 
 
@@ -67,6 +67,10 @@ def get_unscored() -> list[dict]:
 
 def get_new_with_descriptions() -> list[dict]:
     return api_client.get("/api/jobs/new-with-descriptions").json()
+
+
+def get_dealbreaker_rejected_with_descriptions() -> list[dict]:
+    return api_client.get("/api/jobs/dealbreaker-rejected-with-descriptions").json()
 
 
 def get_by_status(status: str) -> list[dict]:
@@ -155,10 +159,11 @@ def update_ranking_scores(
     rank_reason: str | None = None,
     debate_flag: str | None = None,
     debate_note: str | None = None,
+    fingerprint: str | None = None,
 ) -> None:
     api_client.patch(f"/api/jobs/{job_id}/ranking", json={
         "embedding_score": embedding_score, "rerank_score": rerank_score, "listwise_rank": listwise_rank,
-        "rank_reason": rank_reason, "debate_flag": debate_flag, "debate_note": debate_note,
+        "rank_reason": rank_reason, "debate_flag": debate_flag, "debate_note": debate_note, "fingerprint": fingerprint,
     })
 
 

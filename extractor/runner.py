@@ -143,7 +143,11 @@ def extract_job(description: str, source: str | None = None) -> dict:
 
         tool_block = next((b for b in response.content if b.type == "tool_use"), None)
         if tool_block:
-            return dict(tool_block.input)
+            data = dict(tool_block.input)
+            data["_field_confidence"] = {
+                key: "medium" for key, value in data.items() if value not in (None, [], "unknown")
+            }
+            return data
     except Exception as e:
         logger.warning(f"Extraction failed: {e}")
     return {}
@@ -160,7 +164,14 @@ def _merge_source_structured_data(data: dict, job: dict) -> dict:
         source_data = json.loads(raw) if isinstance(raw, str) else raw
     except Exception:
         return data
-    return {**data, **source_data}
+    merged = {**data, **source_data}
+    confidence = dict(data.get("_field_confidence") or {})
+    confidence.update({
+        key: "high" for key, value in source_data.items()
+        if key != "_field_confidence" and value not in (None, [], "unknown")
+    })
+    merged["_field_confidence"] = confidence
+    return merged
 
 
 def run_extraction(jobs: list[dict]) -> int:

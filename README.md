@@ -24,7 +24,7 @@ JobAgent is a local, single-user client with **no database of its own** — ever
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  COLLECTION                                                             │
-│  LinkedIn + job boards → keyword/language filter → fetch descriptions  │
+│  LinkedIn + remote boards + company ATS feeds → filter → descriptions │
 │  → JobAgentWeb (Postgres, shared job pool)                              │
 └──────────────────────────────┬──────────────────────────────────────────┘
                                │ new jobs with descriptions
@@ -61,6 +61,26 @@ JobAgent is a local, single-user client with **no database of its own** — ever
 ```
 
 Each run makes the next one smarter: your decisions feed the preference distiller, which shapes scoring and ranking. First-time visitors land on a short questionnaire (CV + work mode/salary/seniority/company/stack preferences) before the dashboard appears at all.
+
+The candidate profile separates the country where work is performed from preferred employer markets. Seniority and company type are soft preferences unless explicitly marked as required. Score and ranking fingerprints automatically invalidate stale AI results after a change to the CV, questionnaire, learned preferences, job content, prompts, models, or ranking implementation.
+
+### Supported job sources
+
+JobAgent currently collects from 19 source integrations:
+
+| Group | Sources |
+|-------|---------|
+| Broad market | LinkedIn |
+| International remote boards | Remotive, Remote OK, Working Nomads, We Work Remotely, Himalayas, Jobicy, JobsCollider, Arbeitnow Europe, Arbeitnow UK |
+| Direct company career boards | Greenhouse, Lever, Ashby — backed by a registry of 200 technology companies |
+| Community listings | Hacker News “Who is hiring?” |
+| Poland-focused boards | justjoin.it, theprotocol.it, it.pracuj.pl, NoFluffJobs, SOLID.Jobs |
+
+International sources are filtered for remote roles that can be performed from the candidate's selected country. A generic “remote” label is not treated as worldwide eligibility: explicit restrictions such as US-only are rejected for a candidate working from Poland.
+
+Search-driven sources use source-specific query planning. LinkedIn searches the candidate's work country plus compatible regional scopes such as Europe, EMEA, and Worldwide; preferred employer countries remain ranking signals because LinkedIn's location filter describes the job's geography, not the employer's headquarters. Tag-based boards receive normalized tags, and catalog-style sources use token-aware role aliases instead of exact title substrings. Query execution rotates using historical search statistics so later queries are not permanently starved by a job limit.
+
+To inspect retrieval without storing jobs, run `python scripts/search_probe.py --sources jobscollider jobicy --queries "Backend Engineer" PHP --locations Poland`. The JSON output contains sample jobs and the available upstream → query → date → geography funnel counters.
 
 ---
 
@@ -131,10 +151,10 @@ On first visit you land on a landing page and are routed to `/questionnaire`. Up
 
 | Section | Feeds into |
 |---------|-----------|
-| Work mode & location | Remote countries / hybrid-onsite cities — drives the deterministic remote-only *and* geo-restriction dealbreaker filters, the collector's search locations, and the dashboard's Countries/Cities filters |
+| Work mode & location | Country worked from drives remote eligibility and collector geography; employer countries are ranking preferences only; hybrid/onsite cities drive local searches and dashboard filters |
 | Compensation | Annual salary floor + currency — drives the deterministic salary-floor dealbreaker filter (job pay is normalized to annual before comparing, whatever period it's quoted in), and the separate "no salary disclosed" dealbreaker if you opt to hide postings that don't list one |
-| Seniority & role | Seniority drives a deterministic seniority-mismatch dealbreaker filter; role types also feed auto-derived search queries and soft scoring context |
-| Company | Preferred company type/product-vs-outsourcing — a **hard dealbreaker filter**, not just scoring context: a job that doesn't match any selected type is auto-rejected |
+| Seniority & role | Seniority is a soft preference unless explicitly marked as required; role types also feed auto-derived search queries and scoring context |
+| Company | Company type/product-vs-outsourcing is a soft preference unless explicitly marked as required |
 | Technologies (required / avoid) | Auto-derived search titles + the rejected-keyword filter |
 | Languages | Two separate checks: the collector auto-rejects postings whose *detected posting-text* language doesn't match any you listed, and the dealbreaker filter separately rejects jobs whose extracted *company working language* doesn't match your working-level (CEFR B2+) languages |
 | Anything else | Free-text notes injected into the candidate profile |
@@ -372,11 +392,11 @@ Fields default to `null` when not explicitly stated — no inference. `salary_pe
 
 `evaluator/dealbreakers.py::apply_dealbreaker_filter()` — deterministic, no LLM call, runs immediately before the scoring loop over not-yet-scored jobs. Auto-rejects (score `0.0`, `status='auto_rejected'`, reason in `score_reason`) any job that violates a **structured**-field dealbreaker from the questionnaire. Every check below fails open: missing, unclear, or unconvertible data is skipped, never treated as a violation.
 
-- **Salary floor** — job pay is normalized to an annual-gross basis (`_annualize()`: hourly ×2016, monthly ×12) before comparing against the candidate's annual `salary_min`. Currency mismatches and unknown pay periods are skipped.
+- **Salary floor** — job pay is normalized to an annual-gross basis (`_annualize()`: hourly ×2016, monthly ×12) before comparing against the candidate's annual `salary_min`. Supported currencies are converted to PLN; unknown currencies and pay periods are skipped.
 - **Remote-only mismatch** — if the candidate's `work_mode` is exactly `["remote"]` and the job's structured data says `hybrid=true` or `remote=false`, it's rejected.
-- **Geo restriction** — a job can be genuinely remote but still restricted to countries that don't include the candidate's selected `remote_countries` (e.g. "Remote, US only" reaching a candidate who only selected Poland).
-- **Seniority mismatch** — the job's extracted seniority isn't in the candidate's selected `seniority_levels`.
-- **Company type mismatch** — the job's `company_type`/`product_vs_outsourcing` doesn't match any of the candidate's selected `preferred_company_types`; a hard filter per the questionnaire's own copy, not just a scoring signal.
+- **Geo restriction** — a job can be genuinely remote but still be unavailable from the candidate's `work_country` (e.g. "Remote, US only" for a candidate working from Poland).
+- **Seniority mismatch** — enforced only against explicitly selected `required_seniority_levels`.
+- **Company type mismatch** — enforced only against explicitly selected `required_company_types`; ordinary company preferences remain scoring signals.
 - **Working language mismatch** — the job's extracted `working_language` isn't among the candidate's working-level (CEFR B2+) languages.
 - **No salary disclosed** — only applies if the candidate explicitly unchecked "also show postings with no salary listed"; a job that does disclose a salary is never touched by this check.
 
@@ -509,6 +529,15 @@ JobAgent/
 │       ├── remotive.py             # JSON API
 │       ├── remoteok.py             # JSON API
 │       ├── workingnomads.py        # JSON API
+│       ├── jobicy.py               # JSON API
+│       ├── jobscollider.py         # JSON API
+│       ├── arbeitnow.py            # Europe + UK JSON APIs
+│       ├── hackernews.py           # HN Who's Hiring via Algolia API
+│       ├── ats.py                  # Shared public ATS board collector
+│       ├── greenhouse.py           # Greenhouse public board API
+│       ├── lever.py                # Lever public postings API
+│       ├── ashby.py                # Ashby public posting API
+│       ├── ats_companies.json      # Curated company board registry
 │       ├── justjoin.py             # justjoin.it — embedded JSON + Playwright for descriptions
 │       ├── theprotocol.py          # theprotocol.it — Playwright (Cloudflare-gated)
 │       ├── itpracuj.py             # it.pracuj.pl — Playwright (Cloudflare-gated)

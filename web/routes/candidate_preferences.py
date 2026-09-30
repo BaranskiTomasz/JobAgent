@@ -87,7 +87,10 @@ def _sync_criteria_from_preferences(fields: dict) -> dict:
     work_mode = fields.get("work_mode") or []
     locations = []
     if "remote" in work_mode:
-        locations += fields.get("remote_countries") or []
+        if fields.get("work_country"):
+            locations.append(fields["work_country"])
+        else:
+            locations += fields.get("remote_countries") or []
     if "hybrid" in work_mode or "onsite" in work_mode:
         locations += fields.get("hybrid_cities") or []
     _replace_criteria("location", locations)

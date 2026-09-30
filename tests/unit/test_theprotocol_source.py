@@ -154,13 +154,18 @@ class TestTheProtocolSourceSearch:
         assert results[0].company == "Acme"
         assert results[0].source == "theprotocol"
 
-    def test_tag_extracted_from_first_word_of_title(self):
+    def test_tag_uses_meaningful_query_token(self):
         src = _make_source()
         src._page.eval_on_selector.return_value = json.dumps(_search_payload([_offer()]))
         src.search("Symfony Developer", "Poland")
         called_url = src._page.goto.call_args[0][0]
         assert "symfony" in called_url
         assert "developer" not in called_url
+
+        src = _make_source()
+        src._page.eval_on_selector.return_value = json.dumps(_search_payload([]))
+        src.search("Senior Backend Engineer", "Poland")
+        assert "backend" in src._page.goto.call_args[0][0]
 
     def test_search_url_does_not_restrict_to_remote_workmode(self):
         # Regression: theprotocol.it is routed for hybrid/onsite Polish-city

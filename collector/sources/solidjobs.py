@@ -26,6 +26,7 @@ import httpx
 
 from collector.base import JobSource, RawJob
 from collector.location import workplace_suffix
+from collector.query_matcher import query_matches
 from collector.utils import strip_html
 
 logger = logging.getLogger(__name__)
@@ -139,20 +140,18 @@ class SolidJobsSource(JobSource):
 
         days = days_back if days_back is not None else self._days_back
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        keyword = title.strip().lower()
-
         offers = self._fetch_all_offers()
 
         results: list[RawJob] = []
+        query_matched = 0
+        date_matched = 0
         for offer in offers:
-            if max_results and len(results) >= max_results:
-                break
 
             job_title = offer.get("jobTitle", "")
             skills = [s.get("name", "") for s in offer.get("requiredSkills") or []]
-            haystack = f"{job_title} {' '.join(skills)}".lower()
-            if keyword not in haystack:
+            if not query_matches(title, job_title, " ".join(skills)):
                 continue
+            query_matched += 1
 
             valid_from = offer.get("validFrom")
             try:
@@ -161,6 +160,7 @@ class SolidJobsSource(JobSource):
                 valid_dt = None
             if valid_dt and valid_dt < cutoff:
                 continue
+            date_matched += 1
 
             offer_id = offer.get("id")
             slug = offer.get("jobOfferUrl")
@@ -176,6 +176,8 @@ class SolidJobsSource(JobSource):
             modes = {mode} if mode else set()
             location_str = f"{city}, Poland{workplace_suffix(modes)}" if city else f"Poland{workplace_suffix(modes)}"
 
+            if max_results and len(results) >= max_results:
+                continue
             results.append(RawJob(
                 title=job_title,
                 company=offer.get("companyName", ""),
@@ -187,4 +189,8 @@ class SolidJobsSource(JobSource):
                 posted_at=valid_dt.isoformat() if valid_dt else None,
             ))
 
+        self.set_search_diagnostics(
+            upstream_found=len(offers), query_matched=query_matched,
+            date_matched=date_matched, geo_matched=date_matched,
+        )
         return results

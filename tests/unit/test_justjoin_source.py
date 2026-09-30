@@ -264,7 +264,7 @@ class TestExtractSourceStructuredData:
         assert "salary_min" not in _extract_source_structured_data(offer)
 
     def test_no_employment_types_returns_no_salary(self):
-        assert _extract_source_structured_data({}) == {}
+        assert _extract_source_structured_data({}) == {"_salary_disclosed": False}
 
     def test_empty_skills_omitted_not_written_as_empty_list(self):
         offer = {"requiredSkills": [], "niceToHaveSkills": []}

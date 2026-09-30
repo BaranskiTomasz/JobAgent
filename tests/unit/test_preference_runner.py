@@ -36,10 +36,10 @@ def test_job_line_no_reason_without_flag():
     assert "stawka za niska" not in line
 
 
-def test_job_line_falls_back_to_score_reason():
+def test_job_line_does_not_treat_score_reason_as_user_feedback():
     j = _job(rejection_reason=None, score_reason="too junior")
     line = _job_line(j, include_reason=True)
-    assert "too junior" in line
+    assert "too junior" not in line
 
 
 def test_job_line_reason_not_truncated_below_400_chars():

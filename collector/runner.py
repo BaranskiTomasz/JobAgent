@@ -2,15 +2,20 @@ import sys
 import random
 import time
 import logging
+import math
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
 from config import STEALTH
-from db.repositories import job_repository, session_repository, criteria_repository, search_stats_repository, excluded_search_queries_repository
+from db.repositories import (
+    candidate_preferences_repository, criteria_repository, excluded_search_queries_repository,
+    job_repository, search_stats_repository, session_repository,
+)
 from collector.filters import apply_keyword_filter, title_banned_reason
 from collector.language_filter import apply_language_filter
 from collector.sources import available as available_sources, make as make_source
+from collector.query_planner import order_queries, source_queries
 from collector.sources.linkedin import LinkedInSource
 
 
@@ -119,7 +124,11 @@ def _fetch_descriptions_in_batches(jobs_pending_description: list[tuple[str, str
 # which would make a country selection a no-op for these sources. The
 # Poland-focused boards only ever search "Poland", and only when the
 # candidate wants Poland at all.
-_WORLDWIDE_REMOTE_SOURCES = frozenset({"remotive", "remoteok", "workingnomads", "weworkremotely", "himalayas"})
+_WORLDWIDE_REMOTE_SOURCES = frozenset({
+    "remotive", "remoteok", "workingnomads", "weworkremotely", "himalayas",
+    "jobicy", "jobscollider", "arbeitnow", "arbeitnow_uk",
+    "greenhouse", "lever", "ashby", "hackernews",
+})
 _POLAND_ONLY_SOURCES = frozenset({"justjoin", "theprotocol", "itpracuj", "nofluffjobs", "solidjobs"})
 _POLAND_ALIASES = frozenset({"poland", "polska", "pl"})
 _POLAND_CITIES = frozenset({
@@ -130,9 +139,16 @@ _POLAND_CITIES = frozenset({
 })
 
 
-def _locations_for_source(source_id: str, locations: list[str]) -> list[str]:
+def _locations_for_source(source_id: str, locations: list[str], work_country: str | None = None) -> list[str]:
+    if source_id == "linkedin":
+        if not work_country:
+            return locations
+        values = [work_country]
+        if work_country.strip().casefold() in _POLAND_ALIASES:
+            values.extend(["Europe", "EMEA", "Worldwide"])
+        return values
     if source_id in _WORLDWIDE_REMOTE_SOURCES:
-        return locations if locations else ["Remote"]
+        return [work_country] if work_country else (locations if locations else ["Remote"])
     if source_id in _POLAND_ONLY_SOURCES:
         wants_poland = any(
             l.strip().lower() in _POLAND_ALIASES or l.strip().lower() in _POLAND_CITIES
@@ -179,19 +195,22 @@ def _collect_job_cards(
     known_urls: set[str],
     rejected_kw: list[str],
     session_id: int,
+    work_country: str | None = None,
 ) -> tuple[int, int, list[tuple[str, str, str]]]:
     jobs_found = 0
     jobs_new = 0
     jobs_pending_description: list[tuple[str, str, str]] = []
     jobs_prefiltered = 0
-    total_searches = 0
-    search_cap_hit = False
+    applicable_sources = [
+        source_id for source_id in selected_sources
+        if _locations_for_source(source_id, locations, work_country)
+    ]
 
-    for source_id in selected_sources:
-        if search_cap_hit:
+    for source_index, source_id in enumerate(applicable_sources):
+        if max_jobs is not None and jobs_new >= max_jobs:
             break
 
-        locations_for_source = _locations_for_source(source_id, locations)
+        locations_for_source = _locations_for_source(source_id, locations, work_country)
         if not locations_for_source:
             logger.info(f"\n[{source_id}] Skipping, none of the candidate's selected countries apply to this source.")
             continue
@@ -203,43 +222,56 @@ def _collect_job_cards(
             with source:
                 source.login()
 
-                queries_for_source = search_queries
+                queries_for_source = source_queries(source_id, search_queries)
+                try:
+                    query_summary = search_stats_repository.get_query_summary(source_id)
+                except Exception:
+                    query_summary = []
+                queries_for_source = order_queries(queries_for_source, query_summary, session_id)
                 if source_id == "linkedin":
                     excluded = excluded_search_queries_repository.get_excluded("linkedin")
                     if excluded:
                         for q in search_queries:
                             if q in excluded:
                                 logger.info(f"  [prune] Skipping LinkedIn query {q!r} (auto-excluded: {excluded[q]})")
-                        queries_for_source = [q for q in search_queries if q not in excluded]
+                        queries_for_source = [q for q in queries_for_source if q.original not in excluded]
 
                 # Fair-share budgets instead of first-come-first-served, so the
                 # first source/query can't consume the whole max_jobs budget.
-                source_budget = max(1, max_jobs // max(1, len(selected_sources))) if max_jobs else None
-                query_budget = (
-                    max(1, source_budget // len(queries_for_source))
-                    if source_budget and queries_for_source else None
+                remaining_sources = len(applicable_sources) - source_index
+                source_budget = (
+                    math.ceil((max_jobs - jobs_new) / remaining_sources)
+                    if max_jobs is not None else None
                 )
                 jobs_new_this_source = 0
+                source_searches = 0
+                source_cap_hit = False
 
                 first_search = True
                 pending_pause = 0.0
-                for title in queries_for_source:
+                for query_index, query in enumerate(queries_for_source):
+                    title = query.original
                     if source_budget and jobs_new_this_source >= source_budget:
                         break
-                    if search_cap_hit:
+                    if source_cap_hit:
                         break
+                    remaining_queries = len(queries_for_source) - query_index
+                    query_budget = (
+                        math.ceil((source_budget - jobs_new_this_source) / remaining_queries)
+                        if source_budget is not None else None
+                    )
                     jobs_new_this_query = 0
                     for location in locations_for_source:
                         if source_budget and jobs_new_this_source >= source_budget:
                             break
                         if query_budget and jobs_new_this_query >= query_budget:
                             break
-                        if source.requires_stealth_pauses and total_searches >= _MAX_TOTAL_SEARCHES:
+                        if source.requires_stealth_pauses and source_searches >= _MAX_TOTAL_SEARCHES:
                             logger.warning(
                                 f"\n[search-cap] Reached the {_MAX_TOTAL_SEARCHES}-search limit for this run, "
                                 "stopping early rather than continuing unbounded."
                             )
-                            search_cap_hit = True
+                            source_cap_hit = True
                             break
 
                         if not first_search and source.requires_stealth_pauses:
@@ -250,11 +282,13 @@ def _collect_job_cards(
 
                         logger.info(f"\nSearching: {title!r} in {location!r}")
                         if source.requires_stealth_pauses:
-                            total_searches += 1
+                            source_searches += 1
                         remaining = None
                         if query_budget:
                             remaining = min(query_budget - jobs_new_this_query, source_budget - jobs_new_this_source)
-                        raw_jobs = source.search(title, location, max_results=remaining, known_urls=known_urls)
+                        source.last_search_diagnostics = {}
+                        raw_jobs = source.search(query.outbound, location, max_results=remaining, known_urls=known_urls)
+                        diagnostics = getattr(source, "last_search_diagnostics", {})
                         jobs_found += len(raw_jobs)
 
                         new_this_search = 0
@@ -299,10 +333,16 @@ def _collect_job_cards(
                                 else:
                                     jobs_pending_description.append((job_id, raw.url, source_id))
                             logger.info(f"  [{jobs_new}{'/' + str(max_jobs) if max_jobs else ''}] {raw.title} @ {raw.company}")
+                            if max_jobs is not None and jobs_new >= max_jobs:
+                                break
 
                         search_stats_repository.record(
                             session_id, source_id, title, location,
                             cards_found=len(raw_jobs), new_found=new_this_search,
+                            upstream_found=diagnostics.get("upstream_found", len(raw_jobs)),
+                            query_matched=diagnostics.get("query_matched", len(raw_jobs)),
+                            date_matched=diagnostics.get("date_matched", len(raw_jobs)),
+                            geo_matched=diagnostics.get("geo_matched", len(raw_jobs)),
                         )
 
                         if source.requires_stealth_pauses:
@@ -327,10 +367,20 @@ def run(
     session_id: int | None = None,
 ) -> dict:
     criteria = criteria_repository.get_active_dict()
+    preferences = candidate_preferences_repository.get_active() or {}
     if titles:
         criteria["titles"] = titles
     if locations:
         criteria["locations"] = locations
+    elif preferences:
+        work_mode = preferences.get("work_mode") or []
+        markets = []
+        if "remote" in work_mode and preferences.get("work_country"):
+            markets.append(preferences["work_country"])
+        if "hybrid" in work_mode or "onsite" in work_mode:
+            markets.extend(preferences.get("hybrid_cities") or [])
+        if markets:
+            criteria["locations"] = list(dict.fromkeys(markets))
     if search_queries_override:
         criteria["search_queries"] = search_queries_override
 
@@ -339,6 +389,7 @@ def run(
         raise ValueError("At least one search query (or job title) and one location must be configured before running the collector.")
 
     selected_sources = source_ids or [s["id"] for s in available_sources()]
+    work_country = (preferences.get("work_country") or "").strip() or None
 
     # Only start/finish our own session when nobody handed us one to reuse:
     # a caller running this as one stage of a larger pipeline already has an
@@ -363,7 +414,7 @@ def run(
         rejected_kw = [r.lower() for r in criteria["rejected"]]
         jobs_found, jobs_new, jobs_pending_description = _collect_job_cards(
             selected_sources, search_queries, criteria["locations"],
-            days_back, max_jobs, known_urls, rejected_kw, session_id,
+            days_back, max_jobs, known_urls, rejected_kw, session_id, work_country,
         )
 
         if jobs_pending_description:

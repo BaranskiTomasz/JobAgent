@@ -42,7 +42,7 @@ def test_remote_countries_and_hybrid_cities(mock_prefs):
 def test_seniority_levels(mock_prefs):
     mock_prefs.return_value = {"seniority_levels": ["senior", "lead"]}
     section = load_questionnaire_preferences()
-    assert "Seniority level(s) wanted: senior, lead" in section
+    assert "Preferred seniority level(s): senior, lead" in section
 
 
 @patch("evaluator.profile.candidate_preferences_repository.get_active")

@@ -11,9 +11,12 @@ from collector.runner import (
 
 
 class TestLocationsForSource:
-    def test_linkedin_gets_every_selected_country_unchanged(self):
+    def test_linkedin_searches_candidate_eligibility_scopes_not_employer_markets(self):
         countries = ["Poland", "Germany", "United Kingdom"]
-        assert _locations_for_source("linkedin", countries) == countries
+        assert _locations_for_source("linkedin", countries, "Poland") == ["Poland", "Europe", "EMEA", "Worldwide"]
+
+    def test_remote_feed_uses_work_country_for_eligibility(self):
+        assert _locations_for_source("jobscollider", ["United States", "United Kingdom"], "Poland") == ["Poland"]
 
     def test_worldwide_remote_sources_search_once_per_candidate_location(self):
         # Regression: a single "Remote" search used to be an optimization, but
@@ -21,7 +24,11 @@ class TestLocationsForSource:
         # everything unconditionally, that made country selection a no-op
         # for these 4 sources, silently letting e.g. "Remote, US only"
         # through for a candidate who only selected Poland.
-        for source_id in ("remotive", "remoteok", "workingnomads", "weworkremotely"):
+        for source_id in (
+            "remotive", "remoteok", "workingnomads", "weworkremotely", "himalayas",
+            "jobicy", "jobscollider", "arbeitnow", "arbeitnow_uk",
+            "greenhouse", "lever", "ashby", "hackernews",
+        ):
             assert _locations_for_source(source_id, ["Poland", "Germany", "Canada"]) == ["Poland", "Germany", "Canada"]
 
     def test_worldwide_remote_source_falls_back_to_remote_when_no_countries_selected(self):
@@ -215,7 +222,7 @@ class TestCollectJobCardsQueryExclusion:
         )
 
         searched_titles = [c.args[0] for c in source.search.call_args_list]
-        assert searched_titles == ["Query A", "Query B"]
+        assert set(searched_titles) == {"Query A", "Query B"}
 
 
 class TestCollectJobCardsBudgetAllocation:
@@ -296,6 +303,72 @@ class TestCollectJobCardsBudgetAllocation:
 
         assert source.search.call_count == 4
 
+    @patch("collector.runner._MAX_TOTAL_SEARCHES", 1)
+    @patch("collector.runner.time.sleep")
+    @patch("collector.runner.excluded_search_queries_repository")
+    @patch("collector.runner.search_stats_repository")
+    @patch("collector.runner.job_repository")
+    @patch("collector.runner.make_source")
+    def test_paced_source_cap_does_not_stop_later_sources(self, mock_make_source, mock_jobs, mock_stats, mock_excluded, mock_sleep):
+        mock_excluded.get_excluded.return_value = {}
+        linkedin = _mock_source()
+        linkedin.requires_stealth_pauses = True
+        remotive = _mock_source()
+        mock_make_source.side_effect = lambda source_id, **kw: {
+            "linkedin": linkedin, "remotive": remotive,
+        }[source_id]
+
+        _collect_job_cards(
+            ["linkedin", "remotive"], ["Developer"], ["Poland", "Germany"],
+            days_back=1, max_jobs=None, known_urls=set(), rejected_kw=[], session_id=1,
+        )
+
+        assert linkedin.search.call_count == 1
+        assert remotive.search.call_count == 2
+
+    @patch("collector.runner.search_stats_repository")
+    @patch("collector.runner.job_repository")
+    @patch("collector.runner.make_source")
+    def test_max_jobs_is_not_exceeded_when_smaller_than_source_count(self, mock_make_source, mock_jobs, mock_stats):
+        sources = {}
+        for name in ("remotive", "remoteok", "workingnomads"):
+            source = _mock_source()
+            source.search.return_value = [
+                RawJob(title="Developer", company=name, location="Remote", url=f"https://{name}.com/1", source=name, description="desc")
+            ]
+            sources[name] = source
+        mock_make_source.side_effect = lambda source_id, **kw: sources[source_id]
+        mock_jobs.insert.side_effect = lambda **kw: kw["url"]
+
+        result = _collect_job_cards(
+            list(sources), ["Developer"], ["Remote"],
+            days_back=1, max_jobs=2, known_urls=set(), rejected_kw=[], session_id=1,
+        )
+
+        assert result[1] == 2
+        assert sources["workingnomads"].search.call_count == 0
+
+    @patch("collector.runner.search_stats_repository")
+    @patch("collector.runner.job_repository")
+    @patch("collector.runner.make_source")
+    def test_unused_source_budget_is_redistributed(self, mock_make_source, mock_jobs, mock_stats):
+        empty = _mock_source()
+        full = _mock_source()
+        full.search.return_value = [
+            RawJob(title=f"Developer {i}", company="Acme", location="Remote", url=f"https://example.com/{i}", source="remoteok", description="desc")
+            for i in range(5)
+        ]
+        mock_make_source.side_effect = lambda source_id, **kw: empty if source_id == "remotive" else full
+        mock_jobs.insert.side_effect = lambda **kw: kw["url"]
+
+        result = _collect_job_cards(
+            ["remotive", "remoteok"], ["Developer"], ["Remote"],
+            days_back=1, max_jobs=4, known_urls=set(), rejected_kw=[], session_id=1,
+        )
+
+        assert result[1] == 4
+        assert full.search.call_args.kwargs["max_results"] == 4
+
 
 class TestCollectJobCardsSearchQueryAttribution:
     @patch("collector.runner.search_stats_repository")
@@ -371,7 +444,7 @@ class TestRunSessionOwnership:
         # Reusing a session means the caller owns its whole lifecycle, including
         # marking it collected, that's _run_pipeline_ws's job in this case, not ours.
         mock_session.mark_collected.assert_not_called()
-        assert mock_collect.call_args.args[-1] == 42
+        assert mock_collect.call_args.args[-2] == 42
 
     @patch("collector.runner.apply_keyword_filter")
     @patch("collector.runner.apply_language_filter")

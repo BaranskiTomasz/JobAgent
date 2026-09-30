@@ -67,7 +67,9 @@
       </div>
 
       <div id="remote-panel" style="display:none;">
-        <label class="field-label">Countries you want to see remote postings from</label>
+        <label class="field-label" for="work-country">Country you will work from</label>
+        <input type="text" id="work-country" list="country-suggestions" placeholder="e.g. Poland">
+        <label class="field-label" style="margin-top:16px;">Preferred countries of the employer</label>
         <div class="field-row" id="country-chips"></div>
         <div class="group-add-row">
           <button class="btn-group-add info" type="button" data-group="EU" onclick="addCountryGroup('EU')">
@@ -88,7 +90,7 @@
           <datalist id="country-suggestions"></datalist>
           <button class="btn-add" type="button" onclick="addChip('country-chips','country-input')">Add</button>
         </div>
-        <p class="card__hint" style="margin:8px 0 0;">Not on the list, or want to start from scratch? Remove any suggestion and add your own — this list is entirely yours.</p>
+        <p class="card__hint" style="margin:8px 0 0;">Employer countries influence ranking only. Remote eligibility is checked against the country you work from.</p>
       </div>
 
       <div id="hybrid-panel" style="display:none; margin-top:16px;">
@@ -133,6 +135,7 @@
         <span class="chip" data-value="lead" onclick="toggle(this)">Lead</span>
         <span class="chip" data-value="director" onclick="toggle(this)">Director</span>
       </div>
+      <div class="check-row"><input type="checkbox" id="seniority-hard"><label for="seniority-hard">Treat selected seniority levels as a strict requirement</label></div>
       <label class="field-label">Role</label>
       <div class="field-row chip-group" id="role-group">
         <span class="chip" data-value="developer" onclick="toggle(this)">Developer / Engineer</span>
@@ -155,7 +158,8 @@
         <span class="chip" data-value="enterprise" onclick="toggle(this)">Enterprise</span>
         <span class="chip" data-value="consulting" onclick="toggle(this)">Consulting</span>
       </div>
-      <p class="card__hint" style="margin-top:10px;">Selecting anything here filters out every other type. Leave empty for no restriction.</p>
+      <div class="check-row"><input type="checkbox" id="company-hard"><label for="company-hard">Treat selected company types as a strict requirement</label></div>
+      <p class="card__hint" style="margin-top:10px;">By default these choices improve ranking without filtering other offers out.</p>
     </section>
 
     <section class="card" id="s-tech">

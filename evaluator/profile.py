@@ -16,13 +16,14 @@ logger = logging.getLogger(__name__)
 # open_notes is included as full free text (not list terms) since a real
 # sentence like "not interested in gambling companies" gives the embedding
 # model actual negation context that a bare listed word can't.
-_RETRIEVAL_LIST_FIELDS = ["role_types", "preferred_company_types", "extra_tech"]
+_RETRIEVAL_LIST_FIELDS = ["role_types", "preferred_company_types", "employer_countries", "extra_tech"]
 
 # Maps a candidate_preferences list field to its rendered label, order here is
 # the order they appear in the prompt.
 _LIST_FIELD_LABELS = [
     ("role_types", "Desired role type(s)"),
     ("preferred_company_types", "Prefers company type(s)"),
+    ("employer_countries", "Prefers employers from"),
     ("extra_tech", "Also interested in"),
     ("avoided_tech", "Wants to avoid working with"),
 ]
@@ -67,12 +68,19 @@ def load_questionnaire_preferences() -> str:
     work_mode = prefs.get("work_mode") or []
     if work_mode:
         lines.append(f"- Work mode: {', '.join(work_mode)}")
-    if prefs.get("remote_countries"):
+    work_country = prefs.get("work_country")
+    if work_country:
+        lines.append(f"- Will perform remote work from: {work_country}")
+    elif prefs.get("remote_countries"):
         lines.append(f"- Remote must be available in: {', '.join(prefs['remote_countries'])}")
     if prefs.get("hybrid_cities"):
         lines.append(f"- OK with hybrid in: {', '.join(prefs['hybrid_cities'])}")
     if prefs.get("seniority_levels"):
-        lines.append(f"- Seniority level(s) wanted: {', '.join(prefs['seniority_levels'])}")
+        lines.append(f"- Preferred seniority level(s): {', '.join(prefs['seniority_levels'])}")
+    if prefs.get("required_seniority_levels"):
+        lines.append(f"- Required seniority level(s): {', '.join(prefs['required_seniority_levels'])}")
+    if prefs.get("required_company_types"):
+        lines.append(f"- Required company type(s): {', '.join(prefs['required_company_types'])}")
 
     for field, label in _LIST_FIELD_LABELS:
         if prefs.get(field):

@@ -12,7 +12,9 @@ def _is_degraded(job: dict) -> bool:
     return job.get("rank_reason") == FALLBACK_RANK_REASON or job.get("debate_flag") == DEBATE_UNAVAILABLE_FLAG
 
 
-def reuse_if_unchanged(listwise_pool: list[dict], previously_fetched_jobs: list[dict]) -> list[dict] | None:
+def reuse_if_unchanged(
+    listwise_pool: list[dict], previously_fetched_jobs: list[dict], fingerprint: str | None = None
+) -> list[dict] | None:
     # Returns the previous run's ranked jobs if the exact same job IDs were
     # already ranked last run AND that result was a genuine listwise/debate
     # outcome, else None (caller should re-run listwise_rank + debate_rank).
@@ -24,5 +26,7 @@ def reuse_if_unchanged(listwise_pool: list[dict], previously_fetched_jobs: list[
     if current_ids != previous_ids:
         return None
     if any(_is_degraded(j) for j in previous_ranked):
+        return None
+    if fingerprint is not None and any(j.get("ranking_fingerprint") != fingerprint for j in previous_ranked):
         return None
     return sorted(listwise_pool, key=lambda j: j["listwise_rank"])

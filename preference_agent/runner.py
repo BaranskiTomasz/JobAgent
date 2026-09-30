@@ -121,7 +121,7 @@ def _job_line(job: dict, include_reason: bool = False) -> str:
     if description:
         job_parts.append(f"| {description[:_DESC_LIMIT]}")
     if include_reason:
-        reason = (job.get("rejection_reason") or job.get("score_reason") or "").strip()
+        reason = (job.get("rejection_reason") or "").strip()
         if reason:
             job_parts.append(f"| reason: {reason[:_REASON_LIMIT]}")
     return " ".join(job_parts)

@@ -77,12 +77,13 @@ def _extract_source_structured_data(posting: dict) -> dict:
     quotes are always monthly regardless of contract type (b2b/permanent),
     a site-wide convention, not a per-posting field, unlike justjoin.it which
     states its own unit explicitly."""
-    data: dict = {}
+    data: dict = {"_salary_disclosed": False}
     salary = posting.get("salary") or {}
     salary_from, salary_to, currency = salary.get("from"), salary.get("to"), salary.get("currency")
     if salary_from and salary_to and currency in _KNOWN_SALARY_CURRENCIES:
         data["salary_min"] = salary_from
         data["salary_max"] = salary_to
+        data["_salary_disclosed"] = True
         data["salary_currency"] = currency
         data["salary_period"] = "monthly"
     return data

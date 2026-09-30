@@ -154,8 +154,8 @@ class TestGetCostPer100:
         usage_repository.log_usage("voyage-3-large", "embed", 1_000_000, 0)  # rank-only run, no scoring
         usage_repository.record_run_summary("rank", started_at2)
 
-        # Only the scoring run counts: 1 job, $3 -> $300 per 100
-        assert usage_repository.get_cost_per_100() == 300.0
+        # All pipeline cost counts against the one scored job: $3 + $0.18 -> $318 per 100
+        assert usage_repository.get_cost_per_100() == 318.0
 
     def test_deleting_jobs_does_not_change_cost_per_100(self):
         # This is the exact reported bug: cost-per-100 used to be computed as

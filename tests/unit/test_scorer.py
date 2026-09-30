@@ -26,7 +26,7 @@ class TestBuildExamplesSection:
         assert "GoodCo" in section
 
     def test_negative_example_appears_in_output(self):
-        section = _build_examples_section([], [_ex(score_reason="On-site only, no remote")])
+        section = _build_examples_section([], [_ex(rejection_reason="On-site only, no remote")])
         assert "REJECTED" in section
         assert "On-site only" in section
 
@@ -48,12 +48,12 @@ class TestBuildExamplesSection:
 
     def test_rejection_reason_not_truncated_below_400_chars(self):
         long_reason = "x" * 300
-        section = _build_examples_section([], [_ex(score_reason=long_reason)])
+        section = _build_examples_section([], [_ex(rejection_reason=long_reason)])
         assert long_reason in section
 
     def test_rejection_reason_still_truncated_at_limit(self):
         long_reason = "x" * (_EXAMPLE_REASON_LIMIT + 100)
-        section = _build_examples_section([], [_ex(score_reason=long_reason)])
+        section = _build_examples_section([], [_ex(rejection_reason=long_reason)])
         assert "x" * _EXAMPLE_REASON_LIMIT in section
         assert "x" * (_EXAMPLE_REASON_LIMIT + 1) not in section
 
@@ -86,12 +86,12 @@ class TestBuildCalibrationSection:
         assert "PHP Dev" in section
         assert "On-site only" in section
 
-    def test_false_positive_falls_back_to_score_reason(self):
+    def test_false_positive_does_not_treat_ai_reason_as_user_feedback(self):
         section = _build_calibration_section([{
             "divergence_type": "false_positive", "listwise_rank": 2,
             "title": "PHP Dev", "rejection_reason": None, "score_reason": "Looked like a match",
         }])
-        assert "Looked like a match" in section
+        assert "Looked like a match" not in section
 
     def test_false_negative_case_formatted(self):
         section = _build_calibration_section([{

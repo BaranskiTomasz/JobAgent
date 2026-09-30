@@ -1,5 +1,6 @@
 import os
 import subprocess
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -16,7 +17,9 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test-key-not-real")
 os.environ.setdefault("VOYAGE_API_KEY", "test-voyage-key-not-real")
 
 _TEST_PORT = 8511
-os.environ.setdefault("JOBAGENTWEB_BASE_URL", f"http://127.0.0.1:{_TEST_PORT}")
+os.environ["JOBAGENTWEB_BASE_URL"] = os.environ.get(
+    "JOBAGENTWEB_TEST_BASE_URL", f"http://127.0.0.1:{_TEST_PORT}"
+)
 
 import pytest
 import httpx
@@ -29,14 +32,22 @@ import api_client
 # the same isolated jobagentweb_test Postgres its own test suite uses, same
 # "hit a real backend, not mocks" philosophy already established there.
 _JOBAGENTWEB_REPO = Path(os.environ.get("JOBAGENTWEB_REPO_PATH", Path(__file__).resolve().parent.parent.parent / "JobAgentWeb"))
-_JOBAGENTWEB_PYTHON = _JOBAGENTWEB_REPO / ".venv" / "Scripts" / "python.exe"
+_JOBAGENTWEB_PYTHON_CANDIDATES = (
+    _JOBAGENTWEB_REPO / ".venv" / "bin" / "python",
+    _JOBAGENTWEB_REPO / ".venv" / "Scripts" / "python.exe",
+)
+_JOBAGENTWEB_PYTHON = next(
+    (path for path in _JOBAGENTWEB_PYTHON_CANDIDATES if path.is_file()),
+    None,
+)
 
 
 @pytest.fixture(scope="session", autouse=True)
 def jobagentweb_server():
-    if not _JOBAGENTWEB_PYTHON.exists():
+    if _JOBAGENTWEB_PYTHON is None:
+        expected_paths = ", ".join(str(path) for path in _JOBAGENTWEB_PYTHON_CANDIDATES)
         pytest.exit(
-            f"JobAgentWeb venv not found at {_JOBAGENTWEB_PYTHON}, set JOBAGENTWEB_REPO_PATH "
+            f"JobAgentWeb venv not found at any of: {expected_paths}. Set JOBAGENTWEB_REPO_PATH "
             "or check out JobAgentWeb as a sibling directory with its venv set up.",
             returncode=1,
         )
@@ -46,18 +57,18 @@ def jobagentweb_server():
         "INVITE_CODE": "test-invite-code",  # JobAgentWeb closes registration without one, matches its own conftest.py default
         "SECRET_KEY": "test-only-secret-key-not-real-923nf",  # JobAgentWeb now hard-fails at import without one
         "DISABLE_RATE_LIMIT": "true",  # this suite registers a fresh user per test, far more than a real client
-        "POSTGRES_HOST": "10.66.0.1",
-        "POSTGRES_PORT": "5432",
-        "POSTGRES_DB": "jobagentweb_test",
-        "POSTGRES_USER": "jobagentweb_test",
-        "POSTGRES_PASSWORD": "test_only_pw_923nf",
+        "POSTGRES_HOST": os.environ.get("POSTGRES_HOST", "10.66.0.1"),
+        "POSTGRES_PORT": os.environ.get("POSTGRES_PORT", "5432"),
+        "POSTGRES_DB": os.environ.get("POSTGRES_DB", "jobagentweb_test"),
+        "POSTGRES_USER": os.environ.get("POSTGRES_USER", "jobagentweb_test"),
+        "POSTGRES_PASSWORD": os.environ.get("POSTGRES_PASSWORD", "test_only_pw_923nf"),
         "SESSION_HTTPS_ONLY": "false",
     })
     # A pipe that nobody drains fills up (uvicorn logs a line per request) and the
     # child then blocks on its own stdout write() forever, the whole test run
     # freezes mid-suite with no error, just an unresponsive server. Redirect to a
     # real file instead; the OS handles that without the parent needing to read it.
-    log_path = Path(os.environ.get("TMPDIR", os.environ.get("TEMP", "."))) / f"jobagentweb_test_server_{_TEST_PORT}.log"
+    log_path = Path(tempfile.gettempdir()) / f"jobagentweb_test_server_{_TEST_PORT}.log"
     log_file = open(log_path, "w", encoding="utf-8")
     proc = subprocess.Popen(
         [str(_JOBAGENTWEB_PYTHON), "-m", "uvicorn", "main:app", "--port", str(_TEST_PORT)],

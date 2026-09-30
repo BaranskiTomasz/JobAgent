@@ -20,8 +20,11 @@ ROOT     = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 LOGS_DIR = os.path.join(ROOT, "data", "logs")
 
 # Prefer the project venv so subprocesses have all dependencies (voyageai etc.)
-_venv_python = os.path.join(ROOT, ".venv", "Scripts", "python.exe")
-PYTHON = _venv_python if os.path.exists(_venv_python) else sys.executable
+_venv_pythons = (
+    os.path.join(ROOT, ".venv", "bin", "python"),
+    os.path.join(ROOT, ".venv", "Scripts", "python.exe"),
+)
+PYTHON = next((path for path in _venv_pythons if os.path.isfile(path)), sys.executable)
 _KEEP_LOGS = 30
 
 _agent_process: subprocess.Popen | None = None
@@ -55,6 +58,10 @@ def _is_run_active() -> bool:
         return True
     from db.repositories import session_repository
     return session_repository.has_active_run()
+
+
+def _days_since_last_run() -> int:
+    return session_repository.days_since_last_collection()
 
 
 class _RunGuard:
@@ -332,7 +339,7 @@ def _agent_run(ws):
             params = {}
 
         if params.get("since_last_run"):
-            days = session_repository.days_since_last_collection()
+            days = _days_since_last_run()
         else:
             try:
                 days = int(params.get("days", 1))
