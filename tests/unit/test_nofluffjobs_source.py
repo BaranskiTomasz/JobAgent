@@ -54,6 +54,18 @@ def test_salary_period_uses_explicit_hourly_unit_from_description():
     assert data["salary_period"] == "hourly"
 
 
+def test_salary_period_uses_native_period_when_description_omits_salary():
+    posting = {"salary": {"from": 110, "to": 120, "currency": "PLN", "period": "Hour"}}
+    data = _extract_source_structured_data(posting, "Opis bez informacji o stawce")
+    assert data["salary_period"] == "hourly"
+
+
+def test_native_period_takes_precedence_over_description():
+    posting = {"salary": {"from": 14000, "to": 16000, "currency": "PLN", "period": "Month"}}
+    data = _extract_source_structured_data(posting, "Inny fragment wspomina 100 PLN/h")
+    assert data["salary_period"] == "monthly"
+
+
 def test_salary_period_defaults_to_monthly_without_hourly_unit():
     posting = {"salary": {"from": 14000, "to": 16000, "currency": "PLN"}}
     data = _extract_source_structured_data(posting, "Wynagrodzenie miesięczne")

@@ -74,9 +74,8 @@ def _extract_source_structured_data(posting: dict, description: str | None = Non
     """NoFluffJobs' own search-result payload already discloses salary as a
     structured field (verified live against the real site), not prose, no
     reason to make Haiku re-guess it from the description later. NoFluffJobs
-    quotes are always monthly regardless of contract type (b2b/permanent),
-    a site-wide convention, not a per-posting field, unlike justjoin.it which
-    states its own unit explicitly."""
+    payload also states the period explicitly, so it remains authoritative
+    when the shortened detail description omits the salary line."""
     data: dict = {"_salary_disclosed": False}
     salary = posting.get("salary") or {}
     salary_from, salary_to, currency = salary.get("from"), salary.get("to"), salary.get("currency")
@@ -85,8 +84,14 @@ def _extract_source_structured_data(posting: dict, description: str | None = Non
         data["salary_max"] = salary_to
         data["_salary_disclosed"] = True
         data["salary_currency"] = currency
-        hourly = bool(re.search(r"(?:PLN|EUR|USD|GBP)\s*/\s*(?:h|hour|godz)", description or "", re.IGNORECASE))
-        data["salary_period"] = "hourly" if hourly else "monthly"
+        period = str(salary.get("period") or "").lower()
+        if period in {"hour", "hourly"}:
+            data["salary_period"] = "hourly"
+        elif period in {"month", "monthly"}:
+            data["salary_period"] = "monthly"
+        else:
+            hourly = bool(re.search(r"(?:PLN|EUR|USD|GBP)\s*/\s*(?:h|hour|godz)", description or "", re.IGNORECASE))
+            data["salary_period"] = "hourly" if hourly else "monthly"
     return data
 
 
