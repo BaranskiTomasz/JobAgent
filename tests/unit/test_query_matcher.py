@@ -39,3 +39,19 @@ def test_job_technology_can_be_present_in_description():
         "Senior Backend Engineer",
         "Production services written in PHP",
     )
+
+
+def test_job_rejects_unrelated_engineering_specialty():
+    assert not job_matches_query(
+        "Python Developer",
+        "Senior Security Engineer",
+        "Automation and tooling written in Python",
+    )
+
+
+def test_job_rejects_customer_engineering_role():
+    assert not job_matches_query(
+        "Python Developer",
+        "Principal Customer Engineer",
+        "Helps customers deploy Python applications",
+    )

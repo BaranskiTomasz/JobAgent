@@ -53,6 +53,14 @@ def job_matches_query(query: str, title: str, details: str | None = None) -> boo
     title_tokens = set(query_tokens(title))
     if "engineer" in required and "engineer" not in title_tokens:
         return False
+    technical = required - {"engineer"}
+    normalized_title = title.casefold().replace("-", " ")
+    generic_software_role = any(marker in normalized_title for marker in (
+        "software", "developer", "backend", "frontend", "front end",
+        "fullstack", "full stack", "web application",
+    ))
+    if technical and not technical.issubset(title_tokens) and not generic_software_role:
+        return False
     available = title_tokens | set(query_tokens(details or ""))
     return required.issubset(available)
 

@@ -8,7 +8,7 @@ import httpx
 
 from collector.base import JobSource, RawJob
 from collector.location import location_matches
-from collector.query_matcher import query_tokens
+from collector.query_matcher import job_matches_query, query_tokens
 
 _BOARDS_FILE = Path(__file__).with_name("ats_companies.json")
 
@@ -115,7 +115,7 @@ class ATSBoardSource(JobSource):
         date_matched = 0
         geo_matched = 0
         for job, title_tokens, available, published in self._search_index:
-            if not required or ("engineer" in required and "engineer" not in title_tokens) or not required.issubset(available):
+            if not required or not required.issubset(available) or not job_matches_query(title, job.title, job.description):
                 continue
             query_matched += 1
             if not published or published < cutoff:
