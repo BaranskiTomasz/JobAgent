@@ -14,6 +14,7 @@ guess the exact key, we scan all top-level values for the shape we need.
 Search results don't include the full description (only tags/salary/seniority), so a
 second GET to the job's detail page is made per new posting.
 """
+import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -38,7 +39,6 @@ _STATE_RE = re.compile(r'<script id="serverApp-state" type="application/json">(.
 
 
 def _parse_server_state(html: str) -> dict | None:
-    import json
     m = _STATE_RE.search(html)
     if not m:
         return None
@@ -70,7 +70,7 @@ def _find_description(state: dict) -> str | None:
 _KNOWN_SALARY_CURRENCIES = {"PLN", "EUR", "USD", "GBP"}
 
 
-def _extract_source_structured_data(posting: dict) -> dict:
+def _extract_source_structured_data(posting: dict, description: str | None = None) -> dict:
     """NoFluffJobs' own search-result payload already discloses salary as a
     structured field (verified live against the real site), not prose, no
     reason to make Haiku re-guess it from the description later. NoFluffJobs
@@ -85,7 +85,8 @@ def _extract_source_structured_data(posting: dict) -> dict:
         data["salary_max"] = salary_to
         data["_salary_disclosed"] = True
         data["salary_currency"] = currency
-        data["salary_period"] = "monthly"
+        hourly = bool(re.search(r"(?:PLN|EUR|USD|GBP)\s*/\s*(?:h|hour|godz)", description or "", re.IGNORECASE))
+        data["salary_period"] = "hourly" if hourly else "monthly"
     return data
 
 
@@ -191,6 +192,7 @@ class NoFluffJobsSource(JobSource):
             real_city = next((c for c in cities if c != "Remote"), None)
             location = f"{real_city}, Poland{workplace_suffix(modes)}" if real_city else f"Poland{workplace_suffix(modes)}"
 
+            description = self.fetch_description(job_url)
             results.append(RawJob(
                 title=posting.get("title", ""),
                 company=posting.get("name", ""),
@@ -198,9 +200,9 @@ class NoFluffJobsSource(JobSource):
                 url=job_url,
                 source=self.name,
                 source_id=posting.get("id"),
-                description=self.fetch_description(job_url),
+                description=description,
                 posted_at=posted_dt.isoformat() if posted_dt else None,
-                source_structured_data=_extract_source_structured_data(posting) or None,
+                source_structured_data=_extract_source_structured_data(posting, description) or None,
             ))
 
         return results

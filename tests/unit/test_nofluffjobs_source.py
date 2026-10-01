@@ -48,6 +48,18 @@ class TestFindDescription:
         assert _find_description({"SOME_KEY": {}}) is None
 
 
+def test_salary_period_uses_explicit_hourly_unit_from_description():
+    posting = {"salary": {"from": 140, "to": 160, "currency": "PLN"}}
+    data = _extract_source_structured_data(posting, "Stawka: 140-160 PLN/h + VAT")
+    assert data["salary_period"] == "hourly"
+
+
+def test_salary_period_defaults_to_monthly_without_hourly_unit():
+    posting = {"salary": {"from": 14000, "to": 16000, "currency": "PLN"}}
+    data = _extract_source_structured_data(posting, "Wynagrodzenie miesięczne")
+    assert data["salary_period"] == "monthly"
+
+
 def _posting(slug="php-developer-remote", title="PHP Developer", company="Acme", posting_id="abc-1", days_ago=0, places=None):
     posted_ms = int((datetime.now(timezone.utc) - timedelta(days=days_ago)).timestamp() * 1000)
     posting = {"id": posting_id, "name": company, "title": title, "url": slug, "posted": posted_ms}
