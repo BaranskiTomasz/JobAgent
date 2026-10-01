@@ -55,3 +55,11 @@ def test_job_rejects_customer_engineering_role():
         "Principal Customer Engineer",
         "Helps customers deploy Python applications",
     )
+
+
+def test_job_rejects_different_developer_specialty():
+    assert not job_matches_query(
+        "JavaScript Developer",
+        "Salesforce Developer",
+        "Uses JavaScript for custom integrations",
+    )
