@@ -11,6 +11,7 @@ from collector.base import JobSource, RawJob
 from collector.query_matcher import query_matches
 
 _SEARCH_URL = LINKEDIN["search_url"]
+_MAX_PAGES_PER_SEARCH = 10
 
 # Pages visited between job batches to simulate organic browsing
 _DISTRACTION_URLS = [
@@ -299,6 +300,9 @@ class LinkedInSource(JobSource):
 
             cap_count = new_total if known_urls is not None else len(results)
             if max_jobs and cap_count >= max_jobs:
+                break
+            if page_num >= _MAX_PAGES_PER_SEARCH:
+                print(f"  Reached page limit ({_MAX_PAGES_PER_SEARCH}), stopping this search.")
                 break
 
             next_btn = self._page.query_selector("button[aria-label='View next page']")
