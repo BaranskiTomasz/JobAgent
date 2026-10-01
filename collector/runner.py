@@ -16,6 +16,7 @@ from collector.filters import apply_keyword_filter, title_banned_reason
 from collector.language_filter import apply_language_filter
 from collector.sources import available as available_sources, make as make_source
 from collector.query_planner import order_queries, source_queries
+from collector.query_matcher import job_matches_query
 from collector.sources.linkedin import LinkedInSource
 
 
@@ -289,6 +290,10 @@ def _collect_job_cards(
                         source.last_search_diagnostics = {}
                         raw_jobs = source.search(query.outbound, location, max_results=remaining, known_urls=known_urls)
                         diagnostics = getattr(source, "last_search_diagnostics", {})
+                        raw_jobs = [
+                            raw for raw in raw_jobs
+                            if job_matches_query(title, raw.title, raw.description)
+                        ]
                         jobs_found += len(raw_jobs)
 
                         new_this_search = 0

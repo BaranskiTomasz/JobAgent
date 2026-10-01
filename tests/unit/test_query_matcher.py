@@ -1,4 +1,4 @@
-from collector.query_matcher import primary_query_token, query_matches, query_tokens
+from collector.query_matcher import job_matches_query, primary_query_token, query_matches, query_tokens
 
 
 def test_role_aliases_match():
@@ -23,3 +23,19 @@ def test_technology_spelling_is_normalized():
 
 def test_primary_token_avoids_seniority_and_generic_role():
     assert primary_query_token("Senior Backend Engineer") == "backend"
+
+
+def test_job_role_must_be_present_in_title():
+    assert not job_matches_query(
+        "Software Engineer",
+        "Customer Success Manager",
+        "Works closely with software engineers",
+    )
+
+
+def test_job_technology_can_be_present_in_description():
+    assert job_matches_query(
+        "PHP Developer",
+        "Senior Backend Engineer",
+        "Production services written in PHP",
+    )

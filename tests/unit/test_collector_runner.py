@@ -238,7 +238,7 @@ class TestCollectJobCardsBudgetAllocation:
         def _source_with_jobs(n, source_name):
             source = _mock_source()
             source.search.return_value = [
-                RawJob(title=f"Dev {i}", company="Acme", location="Poland",
+                RawJob(title=f"PHP Dev {i}", company="Acme", location="Poland",
                        url=f"https://{source_name}.com/{i}", source=source_name, description="desc")
                 for i in range(n)
             ]

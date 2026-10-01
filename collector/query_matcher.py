@@ -9,6 +9,7 @@ _IGNORED = {
 
 _ALIASES = {
     "developer": "engineer",
+    "dev": "engineer",
     "programmer": "engineer",
     "development": "engineer",
     "engineering": "engineer",
@@ -43,6 +44,17 @@ def query_matches(query: str, *texts: str | None) -> bool:
         return False
     available = set(query_tokens(" ".join(text or "" for text in texts)))
     return all(token in available for token in required)
+
+
+def job_matches_query(query: str, title: str, details: str | None = None) -> bool:
+    required = set(query_tokens(query))
+    if not required:
+        return False
+    title_tokens = set(query_tokens(title))
+    if "engineer" in required and "engineer" not in title_tokens:
+        return False
+    available = title_tokens | set(query_tokens(details or ""))
+    return required.issubset(available)
 
 
 def primary_query_token(query: str) -> str:

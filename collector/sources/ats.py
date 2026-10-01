@@ -45,7 +45,7 @@ class ATSBoardSource(JobSource):
         self._days_back = days_back
         self._client: httpx.Client | None = None
         self._jobs_cache: list[RawJob] | None = None
-        self._search_index: list[tuple[RawJob, set[str], datetime | None]] | None = None
+        self._search_index: list[tuple[RawJob, set[str], set[str], datetime | None]] | None = None
         entries = json.loads(_BOARDS_FILE.read_text(encoding="utf-8"))
         self._boards = [entry for entry in entries if entry["source"] == self.provider]
 
@@ -101,7 +101,12 @@ class ATSBoardSource(JobSource):
         jobs = self._fetch_jobs()
         if self._search_index is None:
             self._search_index = [
-                (job, set(query_tokens(f"{job.title} {job.description or ''}")), _parse_iso(job.posted_at))
+                (
+                    job,
+                    set(query_tokens(job.title)),
+                    set(query_tokens(f"{job.title} {job.description or ''}")),
+                    _parse_iso(job.posted_at),
+                )
                 for job in jobs
             ]
         required = set(query_tokens(title))
@@ -109,8 +114,8 @@ class ATSBoardSource(JobSource):
         query_matched = 0
         date_matched = 0
         geo_matched = 0
-        for job, available, published in self._search_index:
-            if not required or not required.issubset(available):
+        for job, title_tokens, available, published in self._search_index:
+            if not required or ("engineer" in required and "engineer" not in title_tokens) or not required.issubset(available):
                 continue
             query_matched += 1
             if not published or published < cutoff:
