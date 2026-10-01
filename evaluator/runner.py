@@ -31,12 +31,7 @@ def run(force_rescore: bool = False, jobs: list[dict] | None = None) -> dict:
             logger.info(f"Force-rescore mode: {len(full_pool)} job(s) will be re-scored.")
         rescore_all = True
     else:
-        # The whole 'new' pool, not just get_unscored(): the dealbreaker
-        # filter is free, so it re-runs over everyone even if a job was
-        # already scored before extraction filled in structured_data or the
-        # questionnaire changed. The LLM-scoring loop below still only
-        # processes jobs that genuinely have no score yet.
-        full_pool = job_repository.get_new_with_descriptions() + job_repository.get_dealbreaker_rejected_with_descriptions()
+        full_pool = job_repository.get_new_with_descriptions()
         rescore_all = False
 
     if not full_pool:

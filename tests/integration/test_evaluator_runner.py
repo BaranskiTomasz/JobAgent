@@ -80,6 +80,14 @@ class TestEvaluatorRunner:
         mock_unscored.assert_not_called()
         assert result["jobs_scored"] == 1
 
+    def test_normal_run_does_not_reopen_historical_dealbreaker_rejections(self):
+        with patch("evaluator.runner.job_repository.get_new_with_descriptions", return_value=[]), \
+             patch("evaluator.runner.job_repository.get_dealbreaker_rejected_with_descriptions") as rejected:
+            result = run()
+
+        rejected.assert_not_called()
+        assert result == {"jobs_scored": 0}
+
     def test_build_system_prompt_called_once_for_entire_batch(self):
         _insert_scoreable(url="https://a.com/1")
         _insert_scoreable(company="Beta", url="https://a.com/2")
@@ -213,7 +221,7 @@ class TestEvaluatorRunner:
 
         candidate_preferences_repository.insert(None, {"required_seniority_levels": []})
         with _patched_run(_good_score(score=8.0)):
-            second = run()
+            second = run(force_rescore=True)
 
         assert second["jobs_scored"] == 1
         job = next(j for j in job_repository.search(status="all") if j["id"] == job_id)
