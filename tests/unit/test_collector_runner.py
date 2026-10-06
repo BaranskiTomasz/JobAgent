@@ -71,6 +71,28 @@ class TestLocationsForSource:
         assert _locations_for_source("linkedin", locations) == locations
 
 
+def test_catalog_run_disables_profile_country_routing():
+    with patch("collector.runner.criteria_repository.get_active_dict", return_value={
+        "search_queries": [], "titles": [], "locations": [], "rejected": [],
+    }), patch("collector.runner.candidate_preferences_repository.get_active", return_value={"work_country": "Poland"}), \
+         patch("collector.runner.session_repository") as sessions, \
+         patch("collector.runner.job_repository") as jobs, \
+         patch("collector.runner._collect_job_cards", return_value=(0, 0, [])) as collect, \
+         patch("collector.runner.apply_language_filter", return_value={"checked": 0, "auto_rejected": 0, "rejected_ids": []}), \
+         patch("collector.runner.apply_keyword_filter", return_value={"checked": 0, "auto_rejected": 0}):
+        sessions.start.return_value = 1
+        jobs.get_all_urls.return_value = set()
+        jobs.get_new.return_value = []
+        collector_run(
+            locations=["Poland", "Bulgaria"],
+            search_queries_override=["Python Developer"],
+            source_ids=["linkedin"],
+            profile_routing=False,
+        )
+
+    assert collect.call_args.args[8] is None
+
+
 class TestSearchPauseSeconds:
     def test_zero_new_stays_within_glance_range(self):
         for _ in range(50):

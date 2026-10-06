@@ -80,6 +80,12 @@ International sources are filtered for remote roles that can be performed from t
 
 Search-driven sources use source-specific query planning. LinkedIn searches the candidate's work country plus compatible regional scopes such as Europe, EMEA, and Worldwide; preferred employer countries remain ranking signals because LinkedIn's location filter describes the job's geography, not the employer's headquarters. Tag-based boards receive normalized tags, and catalog-style sources use token-aware role aliases instead of exact title substrings. Query execution rotates using historical search statistics so later queries are not permanently starved by a job limit.
 
+### Shared public catalog
+
+`python scripts/collect_catalog.py` fills JobAgentWeb's shared, logged-out catalog for PHP, Python, Node.js, React, Angular, and QA remote roles available from Poland or Bulgaria. The script rotates two technology queries per run, so LinkedIn receives four country/query searches rather than the full twelve-search matrix at once. Use `--queries-per-run`, `--max-jobs-per-source`, and `--sources` to adjust the budget. LinkedIn results carry the searched country as source-native remote eligibility evidence; JobAgentWeb still validates that evidence before publishing a posting.
+
+Catalog collection reuses the same global `job_postings` records and cross-source aliases as personal runs. When a visitor creates an account and selects **Add to my agent**, JobAgentWeb creates only their `user_job_states` rows. Descriptions, extraction data, and duplicates stay shared; scores, ranking, and application decisions remain user-specific.
+
 To inspect retrieval without storing jobs, run `python scripts/search_probe.py --sources jobscollider jobicy --queries "Backend Engineer" PHP --locations Poland`. The JSON output contains sample jobs and the available upstream → query → date → geography funnel counters.
 
 ---

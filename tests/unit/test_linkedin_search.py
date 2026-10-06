@@ -17,6 +17,7 @@ def test_search_drops_unrelated_recommendation_cards(mock_collect, mock_goto, mo
     results = source.search("PHP Developer", "Poland", max_results=3)
 
     assert [job.title for job in results] == ["Senior PHP Engineer"]
+    assert results[0].source_structured_data == {"remote": True, "remote_regions": ["Poland"]}
 
 
 @patch.object(LinkedInSource, "_scroll_to_bottom")

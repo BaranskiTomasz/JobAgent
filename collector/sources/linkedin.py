@@ -113,7 +113,10 @@ class LinkedInSource(JobSource):
         self._goto(url)
         self._wait()
         cards = self._collect_cards(max_jobs=max_results, known_urls=known_urls)
-        return [card for card in cards if query_matches(title, card.title)]
+        matching = [card for card in cards if query_matches(title, card.title)]
+        for card in matching:
+            card.source_structured_data = {"remote": True, "remote_regions": [location]}
+        return matching
 
     def fetch_description(self, url: str) -> str | None:
         self._jitter_mouse()

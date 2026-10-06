@@ -371,6 +371,7 @@ def run(
     source_ids: list[str] | None = None,
     session_id: int | None = None,
     max_jobs_per_source: int | None = None,
+    profile_routing: bool = True,
 ) -> dict:
     criteria = criteria_repository.get_active_dict()
     preferences = candidate_preferences_repository.get_active() or {}
@@ -395,7 +396,7 @@ def run(
         raise ValueError("At least one search query (or job title) and one location must be configured before running the collector.")
 
     selected_sources = source_ids or [s["id"] for s in available_sources()]
-    work_country = (preferences.get("work_country") or "").strip() or None
+    work_country = ((preferences.get("work_country") or "").strip() or None) if profile_routing else None
 
     # Only start/finish our own session when nobody handed us one to reuse:
     # a caller running this as one stage of a larger pipeline already has an
