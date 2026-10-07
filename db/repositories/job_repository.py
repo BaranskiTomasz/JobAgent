@@ -48,18 +48,20 @@ def get_missing_facts(schema_version: int, limit: int = 200) -> list[dict]:
 def update_facts(
     job_id: str, schema_version: int, model: str, content_hash: str,
     facts: dict, provenance: dict,
-) -> None:
-    api_client.put(f"/api/jobs/{job_id}/facts", json={
+) -> str:
+    response = api_client.put(f"/api/jobs/{job_id}/facts", json={
         "schema_version": schema_version,
         "model": model,
         "content_hash": content_hash,
         "facts": facts,
         "provenance": provenance,
     })
+    return response.json().get("job_id", job_id)
 
 
-def update_description(job_id: str, description: str) -> None:
-    api_client.patch(f"/api/jobs/{job_id}/description", json={"description": description})
+def update_description(job_id: str, description: str) -> str:
+    response = api_client.patch(f"/api/jobs/{job_id}/description", json={"description": description})
+    return response.json().get("id", job_id)
 
 
 def update_score(job_id: str, score: float, reason: str, breakdown: dict | None = None, fingerprint: str | None = None) -> None:

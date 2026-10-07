@@ -82,7 +82,7 @@ Search-driven sources use source-specific query planning. LinkedIn searches the 
 
 ### Shared public catalog
 
-`python scripts/collect_catalog.py` fills JobAgentWeb's shared, logged-out catalog for PHP, Python, Node.js, React, Angular, and QA remote roles available from Poland or Bulgaria. The script rotates two technology queries per run, so LinkedIn receives four country/query searches rather than the full twelve-search matrix at once. Use `--queries-per-run`, `--max-jobs-per-source`, and `--sources` to adjust the budget. LinkedIn results carry the searched country as source-native remote eligibility evidence; JobAgentWeb still validates that evidence before publishing a posting.
+`python scripts/collect_catalog.py` fills JobAgentWeb's shared, logged-out catalog for PHP, Python, Node.js, React, Angular, and QA remote roles available from Poland or Bulgaria. It uses all registered sources except LinkedIn, which remains available only to personal runs because catalog-scale browser automation would put the user's account at risk. The script rotates two technology queries per run. Use `--queries-per-run`, `--max-jobs-per-source`, and `--sources` to adjust the budget; an explicit catalog request for LinkedIn is rejected.
 
 Catalog collection reuses the same global `job_postings` records and cross-source aliases as personal runs. When a visitor creates an account and selects **Add to my agent**, JobAgentWeb creates only their `user_job_states` rows. Descriptions, extraction data, and duplicates stay shared; scores, ranking, and application decisions remain user-specific.
 
@@ -303,7 +303,7 @@ Two consequences worth knowing:
 
 `collector/runner.py` orchestrates all sources. Each source implements `JobSource.search(title, location, days_back, max_results, known_urls)` and returns `RawJob` objects. After collection:
 
-- Jobs are deduplicated by URL only (JobAgentWeb's shared `job_postings` table enforces this) — existing postings are skipped; only new ones are inserted
+- Jobs are deduplicated by canonical URL, stable source identity, exact content, and conservative cross-source similarity. Matching is repeated after descriptions and extracted facts arrive; original URLs remain stored as aliases of one shared posting.
 - New LinkedIn jobs are checked against `rejected` keywords **by title alone** before a description is fetched — a job that's already doomed never costs a page load (`collector/filters.py → title_banned_reason`)
 - LinkedIn descriptions are fetched with Playwright, with delays that scale to what's actually happening on the page instead of a flat random range
 

@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from collector.runner import run
+from collector.sources import available
 
 
 CATALOG_QUERIES = (
@@ -18,11 +19,23 @@ CATALOG_QUERIES = (
     "QA Engineer",
 )
 CATALOG_COUNTRIES = ("Poland", "Bulgaria")
+CATALOG_EXCLUDED_SOURCES = {"linkedin"}
 
 
 def queries_for_slot(slot: int, per_run: int = 2) -> list[str]:
     start = (slot * per_run) % len(CATALOG_QUERIES)
     return [CATALOG_QUERIES[(start + offset) % len(CATALOG_QUERIES)] for offset in range(per_run)]
+
+
+def catalog_sources(requested: list[str] | None = None) -> list[str]:
+    selected = requested or [
+        source["id"] for source in available()
+        if source["id"] not in CATALOG_EXCLUDED_SOURCES
+    ]
+    blocked = sorted(set(selected) & CATALOG_EXCLUDED_SOURCES)
+    if blocked:
+        raise ValueError(", ".join(blocked))
+    return selected
 
 
 def main() -> int:
@@ -35,6 +48,11 @@ def main() -> int:
     parser.add_argument("--sources", nargs="*", default=None)
     args = parser.parse_args()
 
+    try:
+        requested_sources = catalog_sources(args.sources)
+    except ValueError as error:
+        parser.error(f"Sources unavailable for public catalog collection: {error}")
+
     queries = queries_for_slot(args.slot, args.queries_per_run)
     logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(message)s")
     logging.info("Catalog queries: %s", ", ".join(queries))
@@ -43,7 +61,7 @@ def main() -> int:
         max_jobs=args.max_jobs,
         locations=list(CATALOG_COUNTRIES),
         search_queries_override=queries,
-        source_ids=args.sources,
+        source_ids=requested_sources,
         max_jobs_per_source=args.max_jobs_per_source,
         profile_routing=False,
     )

@@ -396,6 +396,8 @@ def run(
         raise ValueError("At least one search query (or job title) and one location must be configured before running the collector.")
 
     selected_sources = source_ids or [s["id"] for s in available_sources()]
+    if not profile_routing and any("linkedin" in source_id.lower() for source_id in selected_sources):
+        raise ValueError("LinkedIn is available only for personalized collection")
     work_country = ((preferences.get("work_country") or "").strip() or None) if profile_routing else None
 
     # Only start/finish our own session when nobody handed us one to reuse:
