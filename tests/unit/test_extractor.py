@@ -226,6 +226,18 @@ def test_normalize_facts_keeps_unspecified_remote_country_unknown():
     result = _normalize_facts({"remote": True, "remote_regions": ["Remote"]})
     assert [item["eligible"] for item in result["country_eligibility"]] == [None, None]
 
+
+def test_normalize_facts_expands_eu_region_and_does_not_store_it_as_country():
+    result = _normalize_facts({
+        "remote": True,
+        "country_eligibility": [{
+            "country_code": "EU", "eligible": True, "engagement_modes": ["employment"],
+            "confidence": 0.8, "evidence": "Remote in the EU",
+        }],
+    })
+    assert {item["country_code"] for item in result["country_eligibility"]} == {"PL", "BG"}
+    assert all(item["eligible"] is True for item in result["country_eligibility"])
+
 def test_source_data_overrides_matching_keys():
     data = {"remote": True, "salary_min": None, "salary_max": None}
     job = {"source_structured_data": json.dumps({"salary_min": 15000, "salary_max": 20000})}

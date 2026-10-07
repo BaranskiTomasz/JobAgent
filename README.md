@@ -378,7 +378,7 @@ Distillation is triggered as a pipeline step — not on every decision:
 
 `extractor/runner.py` — runs with **Claude Haiku 4.5**, tool-use API (`submit_structured_data`). Runs **before** scoring — the dealbreaker filter and the scorer both read `structured_data`, so a freshly-collected job needs to be extracted before either can use it.
 
-Extraction reads the complete cleaned description retained for the source and writes schema version 2. Besides the compatibility fields consumed by the existing evaluator, it captures role family and specialization, seniority range, responsibilities, normalized skills with required/preferred/core semantics, multiple compensation bands, country eligibility and engagement modes, timezone/core hours, work authorization, EOR/visa signals, languages, company stage, team size, travel, office visits, and on-call duties.
+Extraction reads the complete cleaned description retained for the source and writes schema version 3. Besides the compatibility fields consumed by the existing evaluator, it captures role family and specialization, seniority range, responsibilities, normalized skills with required/preferred/core semantics, multiple compensation bands, country eligibility and engagement modes, timezone/core hours, work authorization, EOR/visa signals, languages, company stage, team size, travel, office visits, and on-call duties.
 
 Material values carry evidence and provenance. Source-native API values override text extraction, deterministic normalization maps aliases such as `Node.js` to `nodejs`, and derived PL/BG eligibility remains distinguishable from explicit source data. The extraction request treats posting text as untrusted content and ignores instructions embedded in it.
 

@@ -10,7 +10,7 @@ from db.repositories.usage_repository import log_anthropic
 
 logger = logging.getLogger(__name__)
 
-FACT_SCHEMA_VERSION = 2
+FACT_SCHEMA_VERSION = 3
 
 _SKILL_ALIASES = {
     "node": "nodejs", "node.js": "nodejs", "nodejs": "nodejs",
@@ -351,25 +351,44 @@ def _normalize_facts(data: dict) -> dict:
         normalized["salary_currency"] = normalized.get("salary_currency") or primary_band.get("currency")
         normalized["salary_period"] = normalized.get("salary_period") or primary_band.get("period")
 
-    if not normalized.get("country_eligibility"):
-        regions = " ".join(str(region).lower() for region in normalized.get("remote_regions") or [])
-        broad = any(marker in regions for marker in ("worldwide", "global", "anywhere", "europe", "emea", "eea", "eu"))
-        restricted = any(marker in regions for marker in (
-            "united states", "usa", "us only", "canada", "united kingdom", "uk only",
-            "australia", "new zealand", "latin america", "latam", "apac",
-        ))
-        eligibility = []
-        for country_code, names in (("PL", ("poland", "polska")), ("BG", ("bulgaria", "bułgaria"))):
-            explicit = any(name in regions for name in names)
-            eligible = True if normalized.get("remote") is True and (broad or explicit) else False if normalized.get("remote") is True and restricted else None
-            eligibility.append({
-                "country_code": country_code,
-                "eligible": eligible,
-                "engagement_modes": normalized.get("contract_types") or ["unknown"],
-                "confidence": 0.9 if eligible is not None else 0.5,
-                "evidence": ", ".join(normalized.get("remote_regions") or []) or None,
-            })
-        normalized["country_eligibility"] = eligibility
+    regions = " ".join(str(region).lower() for region in normalized.get("remote_regions") or [])
+    eligibility_by_country = {}
+    broad = any(marker in regions for marker in ("worldwide", "global", "anywhere", "europe", "emea", "eea", "eu"))
+    regional_item = None
+    country_aliases = {"POLAND": "PL", "POLSKA": "PL", "BULGARIA": "BG", "BUŁGARIA": "BG"}
+    for item in normalized.get("country_eligibility") or []:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("country_code") or "").strip().upper()
+        if code in {"EU", "EEA", "EMEA", "WORLDWIDE", "GLOBAL"}:
+            broad = broad or item.get("eligible") is True
+            if item.get("eligible") is True:
+                regional_item = item
+            continue
+        code = country_aliases.get(code, code)
+        if len(code) != 2 or not code.isalpha():
+            continue
+        normalized_item = dict(item)
+        normalized_item["country_code"] = code
+        normalized_item["confidence"] = float(item.get("confidence") or 0.75)
+        eligibility_by_country[code] = normalized_item
+    restricted = any(marker in regions for marker in (
+        "united states", "usa", "us only", "canada", "united kingdom", "uk only",
+        "australia", "new zealand", "latin america", "latam", "apac",
+    ))
+    for country_code, names in (("PL", ("poland", "polska")), ("BG", ("bulgaria", "bułgaria"))):
+        if country_code in eligibility_by_country:
+            continue
+        explicit = any(name in regions for name in names)
+        eligible = True if normalized.get("remote") is True and (broad or explicit) else False if normalized.get("remote") is True and restricted else None
+        eligibility_by_country[country_code] = {
+            "country_code": country_code,
+            "eligible": eligible,
+            "engagement_modes": (regional_item or {}).get("engagement_modes") or normalized.get("contract_types") or ["unknown"],
+            "confidence": float((regional_item or {}).get("confidence") or (0.9 if eligible is not None else 0.5)),
+            "evidence": (regional_item or {}).get("evidence") or ", ".join(normalized.get("remote_regions") or []) or None,
+        }
+    normalized["country_eligibility"] = list(eligibility_by_country.values())
     return normalized
 
 
