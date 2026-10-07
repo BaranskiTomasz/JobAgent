@@ -20,12 +20,12 @@ from collector.query_matcher import job_matches_query
 from collector.sources.linkedin import LinkedInSource
 
 
-def _fetch_one(source, job_id: str, url: str, source_id: str) -> bool:
+def _fetch_one(source, job_id: str, url: str, source_id: str, *, catalog: bool = False) -> bool:
     """Fetch a single pending description, retrying once on failure. Returns True on
     success; marks the job auto_rejected (listing gone) on a second failure."""
     desc = source.fetch_description(url)
     if desc:
-        job_repository.update_description(job_id, desc)
+        job_repository.update_description(job_id, desc, catalog=catalog)
         logger.info(f"  OK: {url.rstrip('/').split('/')[-1]}")
         return True
 
@@ -33,12 +33,13 @@ def _fetch_one(source, job_id: str, url: str, source_id: str) -> bool:
     time.sleep(random.uniform(30, 60))
     desc = source.fetch_description(url)
     if desc:
-        job_repository.update_description(job_id, desc)
+        job_repository.update_description(job_id, desc, catalog=catalog)
         logger.info("  Retry OK")
         return True
 
     logger.info(f"  Failed (unavailable): {url}")
-    job_repository.update_score_and_status(job_id, 0.0, f"Job listing no longer available on {source_id}", "auto_rejected")
+    if not catalog:
+        job_repository.update_score_and_status(job_id, 0.0, f"Job listing no longer available on {source_id}", "auto_rejected")
     return False
 
 
@@ -80,7 +81,12 @@ def _fetch_descriptions_stealthily(jobs: list[tuple[str, str]]) -> tuple[int, in
     return ok_total, fail_total
 
 
-def _fetch_descriptions_directly(source_id: str, jobs: list[tuple[str, str]]) -> tuple[int, int]:
+def _fetch_descriptions_directly(
+    source_id: str,
+    jobs: list[tuple[str, str]],
+    *,
+    catalog: bool = False,
+) -> tuple[int, int]:
     """Non-LinkedIn path: no login, no stealth pacing needed, one session, straight
     through the list."""
     logger.info(f"\nFetching {len(jobs)} {source_id} description(s)...")
@@ -93,14 +99,18 @@ def _fetch_descriptions_directly(source_id: str, jobs: list[tuple[str, str]]) ->
     ok = fail = 0
     with source:
         for job_id, url in jobs:
-            if _fetch_one(source, job_id, url, source_id):
+            if _fetch_one(source, job_id, url, source_id, catalog=catalog):
                 ok += 1
             else:
                 fail += 1
     return ok, fail
 
 
-def _fetch_descriptions_in_batches(jobs_pending_description: list[tuple[str, str, str]]) -> None:
+def _fetch_descriptions_in_batches(
+    jobs_pending_description: list[tuple[str, str, str]],
+    *,
+    catalog: bool = False,
+) -> None:
     by_source: dict[str, list[tuple[str, str]]] = {}
     for job_id, url, source_id in jobs_pending_description:
         by_source.setdefault(source_id, []).append((job_id, url))
@@ -110,7 +120,7 @@ def _fetch_descriptions_in_batches(jobs_pending_description: list[tuple[str, str
         if source_id == "linkedin":
             ok, fail = _fetch_descriptions_stealthily(jobs)
         else:
-            ok, fail = _fetch_descriptions_directly(source_id, jobs)
+            ok, fail = _fetch_descriptions_directly(source_id, jobs, catalog=catalog)
         ok_total += ok
         fail_total += fail
 
@@ -194,6 +204,8 @@ def _collect_job_cards(
     session_id: int,
     work_country: str | None = None,
     max_jobs_per_source: int | None = None,
+    catalog: bool = False,
+    collected_ids: list[str] | None = None,
 ) -> tuple[int, int, list[tuple[str, str, str]]]:
     jobs_found = 0
     jobs_new = 0
@@ -314,6 +326,7 @@ def _collect_job_cards(
                                     search_query=title,
                                     posted_at=raw.posted_at,
                                     source_structured_data=raw.source_structured_data,
+                                    catalog=catalog,
                                 )
                             except Exception as e:
                                 # A single job's insert failing shouldn't take down
@@ -325,12 +338,14 @@ def _collect_job_cards(
                                 continue
 
                             jobs_new += 1
+                            if collected_ids is not None:
+                                collected_ids.append(job_id)
                             jobs_new_this_source += 1
                             jobs_new_this_query += 1
                             new_this_search += 1
                             known_urls.add(raw.url)
                             if not raw.description:
-                                reason = title_banned_reason(raw.title, rejected_kw) if rejected_kw else None
+                                reason = title_banned_reason(raw.title, rejected_kw) if rejected_kw and not catalog else None
                                 if reason:
                                     job_repository.update_score_and_status(job_id, 0.0, reason, "auto_rejected")
                                     jobs_prefiltered += 1
@@ -417,15 +432,21 @@ def run(
     logger.info("=" * 50)
 
     try:
-        known_urls = job_repository.get_all_urls()
+        known_urls = job_repository.get_all_urls(catalog=not profile_routing)
         urls_before_run = set(known_urls)
         logger.info(f"Loaded {len(known_urls)} known URLs for early-stop deduplication.")
 
-        rejected_kw = [r.lower() for r in criteria["rejected"]]
+        # Catalog collection is deliberately profile-agnostic.  In particular,
+        # do not use the candidate's rejected keywords for the title prefilter:
+        # that path mutates a newly collected posting to ``auto_rejected`` before
+        # its description is fetched.  Public catalog jobs must remain available
+        # for everyone; personalized filtering belongs to the personal run.
+        rejected_kw = [r.lower() for r in criteria["rejected"]] if profile_routing else []
+        collected_ids: list[str] = []
         jobs_found, jobs_new, jobs_pending_description = _collect_job_cards(
             selected_sources, search_queries, criteria["locations"],
             days_back, max_jobs, known_urls, rejected_kw, session_id, work_country,
-            max_jobs_per_source,
+            max_jobs_per_source, catalog=not profile_routing, collected_ids=collected_ids,
         )
 
         if jobs_pending_description:
@@ -433,30 +454,33 @@ def run(
             resume = (datetime.now() + timedelta(seconds=cooldown)).strftime("%H:%M")
             logger.info(f"\n[stealth] Cooldown {cooldown:.0f}s before fetching descriptions... → resume ~{resume}")
             time.sleep(cooldown)
-            _fetch_descriptions_in_batches(jobs_pending_description)
+            _fetch_descriptions_in_batches(jobs_pending_description, catalog=not profile_routing)
 
         # Fetched once and shared, both filters used to independently pull the
         # entire 'new' pool (full descriptions included) over HTTP every run.
-        new_jobs = [job for job in job_repository.get_new() if job.get("url") not in urls_before_run]
+        if profile_routing:
+            new_jobs = [job for job in job_repository.get_new() if job.get("url") not in urls_before_run]
+            logger.info("\n=== LANGUAGE FILTER ===")
+            lang_result = apply_language_filter(new_jobs)
+            if lang_result["checked"]:
+                logger.info(f"Checked {lang_result['checked']} job(s), auto-rejected {lang_result['auto_rejected']}")
+            else:
+                logger.info("No languages configured, all jobs passed through")
 
-        logger.info("\n=== LANGUAGE FILTER ===")
-        lang_result = apply_language_filter(new_jobs)
-        if lang_result["checked"]:
-            logger.info(f"Checked {lang_result['checked']} job(s), auto-rejected {lang_result['auto_rejected']}")
+            # Excludes what the language filter just rejected, so the keyword
+            # filter doesn't overwrite that rejection reason with its own.
+            already_rejected = set(lang_result["rejected_ids"])
+            remaining_jobs = [j for j in new_jobs if j["id"] not in already_rejected]
+
+            logger.info("\n=== KEYWORD FILTER ===")
+            filter_result = apply_keyword_filter(remaining_jobs)
+            if filter_result["checked"]:
+                logger.info(f"Checked {filter_result['checked']} job(s), auto-rejected {filter_result['auto_rejected']}")
+            else:
+                logger.info("No criteria configured, all jobs passed through")
         else:
-            logger.info("No languages configured, all jobs passed through")
-
-        # Excludes what the language filter just rejected, so the keyword
-        # filter doesn't overwrite that rejection reason with its own.
-        already_rejected = set(lang_result["rejected_ids"])
-        remaining_jobs = [j for j in new_jobs if j["id"] not in already_rejected]
-
-        logger.info("\n=== KEYWORD FILTER ===")
-        filter_result = apply_keyword_filter(remaining_jobs)
-        if filter_result["checked"]:
-            logger.info(f"Checked {filter_result['checked']} job(s), auto-rejected {filter_result['auto_rejected']}")
-        else:
-            logger.info("No criteria configured, all jobs passed through")
+            new_jobs = []
+            logger.info("\n=== PERSONAL FILTERS SKIPPED (CATALOG MODE) ===")
 
         if owns_session:
             session_repository.mark_collected(session_id)
@@ -468,7 +492,7 @@ def run(
         return {
             "jobs_found": jobs_found,
             "jobs_new": jobs_new,
-            "job_ids": [job["id"] for job in new_jobs],
+            "job_ids": collected_ids if not profile_routing else [job["id"] for job in new_jobs],
         }
 
     except Exception as e:

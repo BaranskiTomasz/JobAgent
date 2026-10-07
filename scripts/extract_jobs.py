@@ -15,14 +15,15 @@ logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--limit", type=int, default=200)
+parser.add_argument("--catalog", action="store_true")
 args = parser.parse_args()
 
-pending = job_repository.get_missing_facts(FACT_SCHEMA_VERSION, args.limit)
+pending = job_repository.get_missing_facts(FACT_SCHEMA_VERSION, args.limit, catalog=args.catalog)
 logger.info(f"Jobs to extract: {len(pending)}")
 
 if not pending:
     logger.info("Nothing to do.")
     sys.exit(0)
 
-updated = run_extraction(pending)
+updated = run_extraction(pending, catalog=args.catalog)
 logger.info(f"Done. Extracted: {updated}")

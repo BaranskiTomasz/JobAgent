@@ -8,6 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from collector.runner import run
 from collector.sources import available
+from db.repositories import job_repository
+from extractor.runner import FACT_SCHEMA_VERSION, run_extraction
 
 
 CATALOG_QUERIES = (
@@ -66,6 +68,12 @@ def main() -> int:
         profile_routing=False,
     )
     logging.info("Catalog collection complete: found=%s new=%s", result["jobs_found"], result["jobs_new"])
+    if result.get("job_ids"):
+        pending = job_repository.get_missing_facts(
+            FACT_SCHEMA_VERSION, max(args.max_jobs or 200, 1), catalog=True,
+        )
+        extracted = run_extraction(pending, catalog=True)
+        logging.info("Catalog extraction complete: extracted=%s", extracted)
     return 0
 
 

@@ -82,7 +82,7 @@ Search-driven sources use source-specific query planning. LinkedIn searches the 
 
 ### Shared public catalog
 
-`python scripts/collect_catalog.py` fills JobAgentWeb's shared, logged-out catalog for PHP, Python, Node.js, React, Angular, and QA remote roles available from Poland or Bulgaria. It uses all registered sources except LinkedIn, which remains available only to personal runs because catalog-scale browser automation would put the user's account at risk. The script rotates two technology queries per run. Use `--queries-per-run`, `--max-jobs-per-source`, and `--sources` to adjust the budget; an explicit catalog request for LinkedIn is rejected.
+`python scripts/collect_catalog.py` fills JobAgentWeb's shared, logged-out catalog for PHP, Python, Node.js, React, Angular, and QA remote roles available from Poland or Bulgaria. It uses all registered sources except LinkedIn, which remains available only to personal runs because catalog-scale browser automation would put the user's account at risk. The script rotates two technology queries per run and extracts structured facts for the newly collected batch. Use `--queries-per-run`, `--max-jobs-per-source`, and `--sources` to adjust the budget; an explicit catalog request for LinkedIn is rejected.
 
 Catalog collection reuses the same global `job_postings` records and cross-source aliases as personal runs. When a visitor creates an account and selects **Add to my agent**, JobAgentWeb creates only their `user_job_states` rows. Descriptions, extraction data, and duplicates stay shared; scores, ranking, and application decisions remain user-specific.
 
@@ -93,6 +93,46 @@ To inspect retrieval without storing jobs, run `python scripts/search_probe.py -
 ## Setup
 
 This is a two-repo, self-hosted setup — JobAgent (this repo, the local client) plus [JobAgentWeb](https://github.com/BaranskiTomasz/JobAgentWeb) (a separate FastAPI + Postgres backend you also deploy yourself), not a single pip-install tool. Budget for standing up both before you have a working system.
+
+### Run an existing local installation against JobAgentWeb
+
+On Linux or macOS, update the checkout, activate its virtual environment, verify the API connection, and start the local dashboard:
+
+```bash
+cd /path/to/JobAgent
+git pull --ff-only
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+curl -fsS "${JOBAGENTWEB_BASE_URL:-https://jobagent.tbaranski.it}/healthz"
+python scripts/login.py
+python web/app.py
+```
+
+Open `http://127.0.0.1:5000`. `scripts/login.py` is unnecessary when `.env` contains a valid `JOBAGENT_API_KEY`; otherwise it creates the reusable session consumed by the dashboard and CLI scripts. `JOBAGENTWEB_BASE_URL` must point to the deployed JobAgentWeb API reachable from this machine. Do not copy PostgreSQL credentials to JobAgent: it communicates exclusively through the authenticated HTTP API.
+
+Run the personalized pipeline from a second terminal:
+
+```bash
+cd /path/to/JobAgent
+source .venv/bin/activate
+python scripts/run_all.py --days 7
+```
+
+For a small verification run, limit newly collected jobs per source and omit the expensive ranking stage:
+
+```bash
+python scripts/run_all.py --days 1 --max-jobs 10 --max-jobs-per-source 2 --skip-ranking
+```
+
+The personalized run may use LinkedIn and writes every discovered posting into the shared `job_postings` pool, while scores, ranking, status, and feedback remain attached only to the authenticated user. Stop the dashboard with `Ctrl+C`; an interrupted pipeline should be stopped through the dashboard if its remote session remains marked as running.
+
+To populate only the public, non-personalized catalog, use the shorter collection-and-extraction path. LinkedIn is rejected in catalog mode:
+
+```bash
+python scripts/collect_catalog.py --days 7 --queries-per-run 6 --max-jobs-per-source 20
+```
+
+The default catalog run rotates two of the six categories; `--queries-per-run 6` covers PHP, Python, Node.js, React, Angular, and QA in one run. Use `python scripts/extract_jobs.py --catalog --limit 200` to backfill unextracted shared descriptions from the last 14 days. Use a smaller per-source limit for a smoke test.
 
 ### Prerequisites
 

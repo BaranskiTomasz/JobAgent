@@ -94,6 +94,44 @@ def test_catalog_run_rejects_linkedin():
     collect.assert_not_called()
 
 
+def test_catalog_run_skips_personal_filters_and_title_prefilter():
+    """The public catalog must keep jobs even when personal criteria reject them."""
+    criteria = {
+        "search_queries": [],
+        "titles": [],
+        "locations": [],
+        "rejected": ["php"],
+    }
+    def collect_catalog(*args, **kwargs):
+        kwargs["collected_ids"].append("catalog-job")
+        return 1, 1, []
+
+    with patch("collector.runner.criteria_repository.get_active_dict", return_value=criteria), \
+         patch("collector.runner.candidate_preferences_repository.get_active", return_value={}), \
+         patch("collector.runner.session_repository") as sessions, \
+         patch("collector.runner.job_repository") as jobs, \
+         patch("collector.runner._collect_job_cards", side_effect=collect_catalog) as collect, \
+         patch("collector.runner.apply_language_filter") as language_filter, \
+         patch("collector.runner.apply_keyword_filter") as keyword_filter:
+        sessions.start.return_value = 1
+        jobs.get_all_urls.return_value = set()
+        result = collector_run(
+            locations=["Poland", "Bulgaria"],
+            search_queries_override=["Python Developer"],
+            source_ids=["greenhouse"],
+            profile_routing=False,
+        )
+
+    assert result["job_ids"] == ["catalog-job"]
+    assert collect.call_args.args[6] == []  # no rejected-keyword title prefilter
+    assert collect.call_args.args[8] is None  # no candidate country routing
+    assert collect.call_args.kwargs["catalog"] is True
+    jobs.get_all_urls.assert_called_once_with(catalog=True)
+    jobs.get_new.assert_not_called()
+    language_filter.assert_not_called()
+    keyword_filter.assert_not_called()
+
+
 class TestSearchPauseSeconds:
     def test_zero_new_stays_within_glance_range(self):
         for _ in range(50):
@@ -120,7 +158,7 @@ class TestFetchOne:
         source.fetch_description.return_value = "A real description"
         result = _fetch_one(source, "job1", "https://example.com/job1", "justjoin")
         assert result is True
-        mock_repo.update_description.assert_called_once_with("job1", "A real description")
+        mock_repo.update_description.assert_called_once_with("job1", "A real description", catalog=False)
 
     @patch("collector.runner.time.sleep")
     @patch("collector.runner.job_repository")
@@ -129,7 +167,18 @@ class TestFetchOne:
         source.fetch_description.side_effect = [None, "Description on retry"]
         result = _fetch_one(source, "job1", "https://example.com/job1", "justjoin")
         assert result is True
-        mock_repo.update_description.assert_called_once_with("job1", "Description on retry")
+        mock_repo.update_description.assert_called_once_with("job1", "Description on retry", catalog=False)
+
+    @patch("collector.runner.time.sleep")
+    @patch("collector.runner.job_repository")
+    def test_catalog_failure_does_not_mutate_personal_status(self, mock_repo, mock_sleep):
+        source = MagicMock()
+        source.fetch_description.return_value = None
+
+        result = _fetch_one(source, "job1", "https://example.com/job1", "justjoin", catalog=True)
+
+        assert result is False
+        mock_repo.update_score_and_status.assert_not_called()
 
     @patch("collector.runner.time.sleep")
     @patch("collector.runner.job_repository")
@@ -175,7 +224,7 @@ class TestFetchDescriptionsInBatches:
         ]
         _fetch_descriptions_in_batches(jobs)
         mock_stealthy.assert_called_once_with([("j1", "https://linkedin.com/jobs/view/1")])
-        mock_direct.assert_called_once_with("justjoin", [("j2", "https://justjoin.it/job-offer/2")])
+        mock_direct.assert_called_once_with("justjoin", [("j2", "https://justjoin.it/job-offer/2")], catalog=False)
 
     @patch("collector.runner._fetch_descriptions_directly")
     def test_never_routes_non_linkedin_jobs_to_stealth_path(self, mock_direct):

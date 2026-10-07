@@ -15,8 +15,9 @@ def insert(
     search_query: str | None = None,
     posted_at: str | None = None,
     source_structured_data: dict | None = None,
+    catalog: bool = False,
 ) -> str | None:
-    resp = api_client.post("/api/jobs", json={
+    resp = api_client.post("/api/jobs/catalog" if catalog else "/api/jobs", json={
         "title": title, "company": company, "location": location, "url": url,
         "source": source, "source_id": source_id, "description": description,
         "search_query": search_query, "posted_at": posted_at,
@@ -25,10 +26,9 @@ def insert(
     return resp.json()["job_id"]
 
 
-def get_all_urls() -> set[str]:
-    """Return all known job URLs (system-wide, not just this user's) as a set
-    for fast early-stop deduplication, see JobAgentWeb's jobs_repo.get_all_urls."""
-    return set(api_client.get("/api/jobs/urls").json()["urls"])
+def get_all_urls(*, catalog: bool = False) -> set[str]:
+    path = "/api/jobs/catalog/urls" if catalog else "/api/jobs/urls"
+    return set(api_client.get(path).json()["urls"])
 
 
 def get_missing_descriptions() -> list[dict]:
@@ -39,17 +39,19 @@ def get_missing_structured_data() -> list[dict]:
     return api_client.get("/api/jobs/missing-structured-data").json()
 
 
-def get_missing_facts(schema_version: int, limit: int = 200) -> list[dict]:
+def get_missing_facts(schema_version: int, limit: int = 200, *, catalog: bool = False) -> list[dict]:
     return api_client.get(
-        "/api/jobs/missing-facts", params={"schema_version": schema_version, "limit": limit},
+        "/api/jobs/catalog/missing-facts" if catalog else "/api/jobs/missing-facts",
+        params={"schema_version": schema_version, "limit": limit},
     ).json()
 
 
 def update_facts(
     job_id: str, schema_version: int, model: str, content_hash: str,
-    facts: dict, provenance: dict,
+    facts: dict, provenance: dict, *, catalog: bool = False,
 ) -> str:
-    response = api_client.put(f"/api/jobs/{job_id}/facts", json={
+    path = f"/api/jobs/catalog/{job_id}/facts" if catalog else f"/api/jobs/{job_id}/facts"
+    response = api_client.put(path, json={
         "schema_version": schema_version,
         "model": model,
         "content_hash": content_hash,
@@ -59,8 +61,9 @@ def update_facts(
     return response.json().get("job_id", job_id)
 
 
-def update_description(job_id: str, description: str) -> str:
-    response = api_client.patch(f"/api/jobs/{job_id}/description", json={"description": description})
+def update_description(job_id: str, description: str, *, catalog: bool = False) -> str:
+    path = f"/api/jobs/catalog/{job_id}/description" if catalog else f"/api/jobs/{job_id}/description"
+    response = api_client.patch(path, json={"description": description})
     return response.json().get("id", job_id)
 
 

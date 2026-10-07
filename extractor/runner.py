@@ -10,7 +10,7 @@ from db.repositories.usage_repository import log_anthropic
 
 logger = logging.getLogger(__name__)
 
-FACT_SCHEMA_VERSION = 3
+FACT_SCHEMA_VERSION = 4
 
 _SKILL_ALIASES = {
     "node": "nodejs", "node.js": "nodejs", "nodejs": "nodejs",
@@ -24,6 +24,10 @@ _EXTRACT_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
+            "summary": {
+                "type": "string",
+                "description": "Neutral 1-2 sentence summary of the role, responsibilities, product and key requirements. Maximum 280 characters. Do not assess candidate fit.",
+            },
             "remote":   {"type": ["boolean", "null"], "description": "Is full remote work available?"},
             "hybrid":   {"type": ["boolean", "null"], "description": "Is hybrid work available?"},
             "seniority": {
@@ -194,7 +198,7 @@ _EXTRACT_TOOL = {
             "evidence": {"type": "object", "additionalProperties": {"type": "string"}},
         },
         "required": [
-            "remote", "hybrid", "seniority",
+            "summary", "remote", "hybrid", "seniority",
             "salary_min", "salary_max", "salary_period", "salary_currency",
             "stack", "stack_required", "stack_preferred",
             "company_type", "product_vs_outsourcing", "working_language",
@@ -287,6 +291,10 @@ def _merge_source_structured_data(data: dict, job: dict) -> dict:
 
 def _normalize_facts(data: dict) -> dict:
     normalized = dict(data)
+    summary = " ".join(str(normalized.get("summary") or "").split())
+    if len(summary) > 280:
+        summary = summary[:277].rsplit(" ", 1)[0] + "…"
+    normalized["summary"] = summary
     skills = []
     for item in normalized.get("skills") or []:
         skill = dict(item)
@@ -409,7 +417,7 @@ def _source_fact_keys(job: dict) -> set[str]:
     return set()
 
 
-def run_extraction(jobs: list[dict]) -> int:
+def run_extraction(jobs: list[dict], *, catalog: bool = False) -> int:
     to_extract = [j for j in jobs if j.get("description")]
     if not to_extract:
         return 0
@@ -434,6 +442,7 @@ def run_extraction(jobs: list[dict]) -> int:
             job_repository.update_facts(
                 job["id"], FACT_SCHEMA_VERSION, CLAUDE_EXTRACT_MODEL,
                 hashlib.sha256(excerpt.encode()).hexdigest(), data, provenance,
+                catalog=catalog,
             )
             logger.info(f"  Extracted: {job['title']} @ {job['company']} → {json.dumps(data, ensure_ascii=False)[:120]}")
             updated += 1
