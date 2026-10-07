@@ -292,6 +292,8 @@ def _merge_source_structured_data(data: dict, job: dict) -> dict:
 def _normalize_facts(data: dict) -> dict:
     normalized = dict(data)
     summary = " ".join(str(normalized.get("summary") or "").split())
+    if summary.strip("<> ").casefold() in {"unknown", "none", "null", "n/a", "not specified"}:
+        summary = ""
     if len(summary) > 280:
         summary = summary[:277].rsplit(" ", 1)[0] + "…"
     normalized["summary"] = summary
@@ -424,12 +426,16 @@ def run_extraction(jobs: list[dict], *, catalog: bool = False) -> int:
 
     updated = 0
     for job in to_extract:
-        data = extract_job(job["description"], job.get("source"))
-        if data:
+        try:
+            data = extract_job(job["description"], job.get("source"))
+            if not data:
+                continue
             data = _merge_source_structured_data(data, job)
             data = _normalize_facts(data)
             excerpt = build_excerpt(job["description"], job.get("source"))
             evidence = data.pop("evidence", {})
+            if not isinstance(evidence, dict):
+                evidence = {}
             source_fact_keys = _source_fact_keys(job)
             provenance = {
                 key: {
@@ -446,5 +452,10 @@ def run_extraction(jobs: list[dict], *, catalog: bool = False) -> int:
             )
             logger.info(f"  Extracted: {job['title']} @ {job['company']} → {json.dumps(data, ensure_ascii=False)[:120]}")
             updated += 1
+        except Exception as error:
+            logger.warning(
+                "  Extraction skipped: %s @ %s, %s",
+                job.get("title"), job.get("company"), error,
+            )
 
     return updated

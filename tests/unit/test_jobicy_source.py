@@ -66,3 +66,17 @@ def test_fetch_jobs_is_cached_per_title():
     source._client.get.return_value = response
     assert source._fetch_jobs("Python") == source._fetch_jobs("Python")
     source._client.get.assert_called_once()
+
+
+def test_qa_fetch_uses_unfiltered_feed_when_api_rejects_qa_tag():
+    source = JobicySource()
+    response = MagicMock()
+    response.json.return_value = {"jobs": []}
+    source._client = MagicMock()
+    source._client.get.return_value = response
+
+    source._fetch_jobs("qa")
+
+    source._client.get.assert_called_once_with(
+        "https://jobicy.com/api/v2/remote-jobs", params={"count": 200},
+    )

@@ -38,7 +38,10 @@ class JobicySource(JobSource):
         if title in self._jobs_cache:
             return self._jobs_cache[title]
         try:
-            response = self._client.get(_API_URL, params={"count": 200, "tag": title})
+            params = {"count": 200}
+            if title.casefold() != "qa":
+                params["tag"] = title
+            response = self._client.get(_API_URL, params=params)
             response.raise_for_status()
             data = response.json()
         except Exception:

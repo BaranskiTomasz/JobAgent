@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from collector.sources.arbeitnow import ArbeitnowSource, ArbeitnowUKSource
+from collector.sources.arbeitnow import _MAX_PAGES, ArbeitnowSource, ArbeitnowUKSource
 
 
 def _job(slug="job-1", location="", days_ago=0, title="Senior Python Developer", remote=True):
@@ -62,3 +62,15 @@ def test_fetch_jobs_paginates_until_cutoff_and_caches():
     assert len(source._fetch_jobs()) == 2
     assert len(source._fetch_jobs()) == 2
     assert source._client.get.call_count == 2
+
+
+def test_fetch_jobs_stops_before_provider_rate_limit_page():
+    response = MagicMock()
+    response.json.return_value = {"data": [_job("recent")], "links": {"next": "next"}}
+    source = ArbeitnowSource(days_back=7)
+    source._client = MagicMock()
+    source._client.get.return_value = response
+
+    source._fetch_jobs()
+
+    assert source._client.get.call_count == _MAX_PAGES

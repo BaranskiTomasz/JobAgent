@@ -84,7 +84,7 @@ Search-driven sources use source-specific query planning. LinkedIn searches the 
 
 `python scripts/collect_catalog.py` fills JobAgentWeb's shared, logged-out catalog for PHP, Python, Node.js, React, Angular, and QA remote roles available from Poland or Bulgaria. It uses all registered sources except LinkedIn, which remains available only to personal runs because catalog-scale browser automation would put the user's account at risk. The script rotates two technology queries per run and extracts structured facts for the newly collected batch. Use `--queries-per-run`, `--max-jobs-per-source`, and `--sources` to adjust the budget; an explicit catalog request for LinkedIn is rejected.
 
-Catalog collection reuses the same global `job_postings` records and cross-source aliases as personal runs. When a visitor creates an account and selects **Add to my agent**, JobAgentWeb creates only their `user_job_states` rows. Descriptions, extraction data, and duplicates stay shared; scores, ranking, and application decisions remain user-specific.
+Catalog collection reuses the same global `job_postings` records and cross-source aliases as personal runs. The authenticated JobAgentWeb catalog-import endpoint can attach a technology/country slice to an account by creating only its `user_job_states` rows; it does not recollect or copy the postings. Descriptions, extraction data, and duplicates stay shared; scores, ranking, and application decisions remain user-specific.
 
 To inspect retrieval without storing jobs, run `python scripts/search_probe.py --sources jobscollider jobicy --queries "Backend Engineer" PHP --locations Poland`. The JSON output contains sample jobs and the available upstream → query → date → geography funnel counters.
 
@@ -136,7 +136,7 @@ The default catalog run rotates two of the six categories; `--queries-per-run 6`
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.12+
 - Google Chrome (for LinkedIn scraping)
 - [Anthropic API key](https://console.anthropic.com/) — Claude Sonnet, Haiku, Opus
 - [Voyage AI API key](https://www.voyageai.com/) — embeddings + reranker
@@ -179,7 +179,7 @@ JOBAGENT_API_KEY=...                         # optional — see .env.example
 python web/app.py
 ```
 
-Open `http://localhost:5000` — with no saved session yet, this lands on `/login`. Log in with your JobAgentWeb username/password (no account yet? Register at `<JOBAGENTWEB_BASE_URL>/register` first — registration requires an invite code, so get one from the operator of that JobAgentWeb instance before you start); the session cookie is saved to `~/.jobagent/session.json` and reused by every script and the dashboard afterward. On first visit after logging in (no saved preferences yet) you land on a landing page that routes you into the questionnaire; the dashboard itself only appears once a preference profile exists.
+Open `http://localhost:5000` — with no saved session yet, this lands on `/login`. Log in with your JobAgentWeb username/password (no account yet? Register at `<JOBAGENTWEB_BASE_URL>/register` first — registration requires an invite code, so request one from the [author](https://www.linkedin.com/in/baranskitomasz/) of that JobAgentWeb instance before you start); the session cookie is saved to `~/.jobagent/session.json` and reused by every script and the dashboard afterward. On first visit after logging in (no saved preferences yet) you land on a landing page that routes you into the questionnaire; the dashboard itself only appears once a preference profile exists.
 
 Headless/server installs with no browser access to port 5000 can authenticate the same way from a terminal instead:
 
@@ -335,7 +335,7 @@ JobAgent holds no database. Every `db/repositories/*.py` module is a thin wrappe
 
 Two consequences worth knowing:
 - **"Delete jobs"** removes rows from *your* `user_job_states` only — the underlying shared posting stays untouched for other users who've found the same URL.
-- **Every script needs a valid session** (log in via the dashboard's `/login` page, or `python scripts/login.py` for headless installs) — there is no local fallback if JobAgentWeb is unreachable.
+- **Every script needs an authenticated JobAgentWeb connection** — either a matching `JOBAGENT_API_KEY` or a saved session created through the dashboard or `python scripts/login.py`. There is no local fallback if JobAgentWeb is unreachable.
 
 ### Pipeline stages in detail
 
@@ -392,7 +392,7 @@ Because bare `"PHP"`/`"Python"` is a superset of `"PHP Developer"`, `"PHP Engine
 `preference_agent/runner.py` — runs with **Claude Opus 4.8**.
 
 Inputs:
-- All `applied` jobs (title, company, location, description up to 1500 chars)
+- Up to 50 most recent `applied` jobs (title, company, location, description up to 1500 chars)
 - Up to 50 most recent `rejected` jobs with user-written rejection reasons
 - Dismissed score factors — specific pros/cons the candidate explicitly said don't apply to them
 - Up to 10 divergence cases: jobs ranked ≤ 5 by Opus but rejected by user, or ranked ≥ 16 but applied to (strongest learning signal)
@@ -550,7 +550,7 @@ Divergence cases are fed back into the next distillation run as high-priority si
 
 **Distillation runs once per Run Agent / Re-score, not on every decision.** This is the most expensive step; the budget is fixed (~50 jobs in context) regardless of total job count. The dealbreaker filter catches some jobs before scoring ever runs, reducing Sonnet spend for a candidate with a firm salary floor or remote-only requirement.
 
-**Listwise ranking + debate are skipped entirely when the top-20 candidate set is identical to what was already ranked last run** (`ranker/rank_cache.py`) — a `Rank jobs (AI)` re-run with nothing new since the last one costs nothing for those two stages, since re-running them against the same 20 jobs would just reproduce the same reasoning.
+**Listwise ranking + debate are skipped only when the top-20 candidate set and its ranking fingerprint are unchanged** (`ranker/rank_cache.py`). The fingerprint covers the candidate profile, questionnaire, learned preferences, job content and ranking implementation/model inputs, so changing those inputs forces a fresh ranking even when the job IDs stay the same.
 
 ### Cost tracking
 
@@ -608,7 +608,7 @@ JobAgent/
 │   ├── listwise.py                 # Opus listwise ranking (top-20 → ordered list)
 │   ├── debate.py                   # Sonnet second opinion over the top-20; demotes dealbreaker_risk
 │   ├── would_apply.py              # Absolute-floor auto-apply flag (validation only, never sends)
-│   └── rank_cache.py               # Skips listwise+debate when the top-20 set is unchanged since last run
+│   └── rank_cache.py               # Reuses listwise+debate only when the pool and input fingerprint are unchanged
 ├── preference_agent/
 │   ├── profile.py                  # ProfileSignal schema + render_signals()
 │   └── runner.py                   # Distill apply/reject/dismissal history → JSON profile
@@ -632,6 +632,8 @@ JobAgent/
 ├── scripts/
 │   ├── login.py                    # Authenticate against JobAgentWeb once; saves session cookie
 │   ├── run_all.py                  # CLI: full pipeline
+│   ├── collect_catalog.py          # Collect + extract shared PL/BG public catalog jobs without LinkedIn
+│   ├── search_probe.py             # Inspect per-source retrieval funnels without storing jobs
 │   ├── rescore_new.py              # Re-score new jobs only
 │   ├── distill_preferences.py      # Run distillation once
 │   ├── rank_jobs.py                # Run embed + rerank + listwise + debate only
@@ -694,7 +696,7 @@ JobAgent has no local database, so `tests/conftest.py` spins up a **real** JobAg
 - Every test gets a freshly-registered JobAgentWeb user for isolation — no mocks against a fake backend.
 - `job_postings`/`job_embeddings` are shared/global and never truncated between tests, so tests that insert jobs use unique URLs to avoid colliding with another test's data.
 
-~800 unit/integration tests, a few minutes total (dominated by starting the JobAgentWeb subprocess once per session). The e2e suite (~9 tests) makes real Claude calls and needs actual Anthropic credit balance — expect these to fail with a billing error, not a code bug, if the account isn't funded.
+The suite currently contains more than 1,300 unit/integration test functions and takes a few minutes (dominated by starting the JobAgentWeb subprocess once per session). The e2e suite contains 11 tests that make real Claude calls and needs actual Anthropic credit balance — expect these to fail with a billing error, not a code bug, if the account isn't funded.
 
 ---
 
@@ -706,7 +708,7 @@ JobAgent has no local database, so `tests/conftest.py` spins up a **real** JobAg
 
 **Scraping breaks / wrong jobs** — LinkedIn occasionally changes its HTML. Update CSS selectors in `collector/sources/linkedin.py`.
 
-**`NotLoggedInError` / 401s from every script** — your session expired or was never created. Open the dashboard (it redirects to `/login` automatically) or run `python scripts/login.py` again.
+**`NotLoggedInError` / 401s from every script** — the configured API key does not match JobAgentWeb, or the saved session expired/was never created. Verify `JOBAGENT_API_KEY` on both sides; when using session authentication, open the dashboard or run `python scripts/login.py` again.
 
 **`overloaded` from Anthropic** — the evaluator retries automatically (3×, 30 s / 60 s). If it keeps failing, wait and retry.
 

@@ -184,6 +184,35 @@ def test_run_extraction_returns_zero_when_extract_returns_empty(mock_extract, mo
     assert count == 0
 
 
+@patch("extractor.runner.job_repository")
+@patch("extractor.runner.extract_job")
+def test_run_extraction_accepts_non_object_evidence(mock_extract, mock_repo):
+    mock_extract.return_value = {
+        "summary": "A role summary.", "remote": True, "evidence": "Remote in Europe",
+    }
+    jobs = [{"id": "j1", "title": "Dev", "company": "Co", "description": "desc"}]
+
+    assert run_extraction(jobs, catalog=True) == 1
+    provenance = mock_repo.update_facts.call_args.args[5]
+    assert provenance["remote"]["evidence"] is None
+
+
+@patch("extractor.runner.job_repository")
+@patch("extractor.runner.extract_job")
+def test_run_extraction_continues_after_one_malformed_job(mock_extract, mock_repo):
+    mock_extract.side_effect = [
+        {"skills": ["invalid"]},
+        {"summary": "Valid summary", "remote": True},
+    ]
+    jobs = [
+        {"id": "bad", "title": "Bad", "company": "Co", "description": "bad"},
+        {"id": "good", "title": "Good", "company": "Co", "description": "good"},
+    ]
+
+    assert run_extraction(jobs, catalog=True) == 1
+    assert mock_repo.update_facts.call_args.args[0] == "good"
+
+
 class TestMergeSourceStructuredData:
     # A source's own native fields (e.g. justjoin.it's salary/skills API
     # fields) are ground truth, not a guess from the description text.
@@ -210,6 +239,10 @@ def test_normalize_facts_builds_legacy_stack_and_salary_fields():
     assert result["stack_required"] == ["nodejs"]
     assert result["salary_max"] == 140
     assert result["salary_period"] == "hourly"
+
+
+def test_normalize_facts_removes_unknown_summary_sentinel():
+    assert _normalize_facts({"summary": "<UNKNOWN>"})["summary"] == ""
 
 
 def test_normalize_facts_derives_poland_and_bulgaria_from_eu_remote():

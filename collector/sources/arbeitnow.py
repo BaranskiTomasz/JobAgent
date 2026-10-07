@@ -7,7 +7,7 @@ from collector.base import JobSource, RawJob
 from collector.location import location_matches
 from collector.utils import strip_html
 
-_MAX_PAGES = 20
+_MAX_PAGES = 14
 
 
 class ArbeitnowSource(JobSource):
