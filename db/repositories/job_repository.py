@@ -39,16 +39,9 @@ def get_missing_structured_data() -> list[dict]:
     return api_client.get("/api/jobs/missing-structured-data").json()
 
 
-def get_missing_facts(
-    schema_version: int, limit: int = 200, max_age_days: int = 14,
-) -> list[dict]:
+def get_missing_facts(schema_version: int, limit: int = 200) -> list[dict]:
     return api_client.get(
-        "/api/jobs/missing-facts",
-        params={
-            "schema_version": schema_version,
-            "limit": limit,
-            "max_age_days": max_age_days,
-        },
+        "/api/jobs/missing-facts", params={"schema_version": schema_version, "limit": limit},
     ).json()
 
 

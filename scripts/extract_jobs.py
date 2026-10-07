@@ -15,12 +15,9 @@ logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--limit", type=int, default=200)
-parser.add_argument("--max-age-days", type=int, default=14)
 args = parser.parse_args()
 
-pending = job_repository.get_missing_facts(
-    FACT_SCHEMA_VERSION, args.limit, args.max_age_days,
-)
+pending = job_repository.get_missing_facts(FACT_SCHEMA_VERSION, args.limit)
 logger.info(f"Jobs to extract: {len(pending)}")
 
 if not pending:
