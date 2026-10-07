@@ -161,5 +161,9 @@ def patch(path: str, **kwargs) -> httpx.Response:
     return request("PATCH", path, **kwargs)
 
 
+def put(path: str, **kwargs) -> httpx.Response:
+    return request("PUT", path, **kwargs)
+
+
 def delete(path: str, **kwargs) -> httpx.Response:
     return request("DELETE", path, **kwargs)

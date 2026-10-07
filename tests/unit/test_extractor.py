@@ -1,7 +1,7 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from extractor.runner import _EXTRACT_TOOL, _merge_source_structured_data, extract_job, run_extraction
+from extractor.runner import _EXTRACT_TOOL, _merge_source_structured_data, _normalize_facts, extract_job, run_extraction
 
 
 def _make_tool_response(data: dict, stop_reason="tool_use"):
@@ -145,14 +145,15 @@ def test_run_extraction_skips_jobs_without_description(mock_extract, mock_repo):
 
 @patch("extractor.runner.job_repository")
 @patch("extractor.runner.extract_job")
-def test_run_extraction_skips_already_extracted(mock_extract, mock_repo):
+def test_run_extraction_replaces_legacy_extraction(mock_extract, mock_repo):
+    mock_extract.return_value = {"remote": True}
     jobs = [{
         "id": "j1", "title": "Dev", "company": "Co",
         "description": "desc", "structured_data": '{"remote": true}',
     }]
     count = run_extraction(jobs)
-    assert count == 0
-    mock_extract.assert_not_called()
+    assert count == 1
+    mock_extract.assert_called_once()
 
 
 @patch("extractor.runner.job_repository")
@@ -162,7 +163,7 @@ def test_run_extraction_calls_update_on_success(mock_extract, mock_repo):
     jobs = [{"id": "j1", "title": "Dev", "company": "Co", "description": "desc", "structured_data": None}]
     count = run_extraction(jobs)
     assert count == 1
-    mock_repo.update_structured_data.assert_called_once()
+    mock_repo.update_facts.assert_called_once()
 
 
 @patch("extractor.runner.job_repository")
@@ -192,26 +193,59 @@ class TestMergeSourceStructuredData:
         job = {"source_structured_data": None}
         assert _merge_source_structured_data(data, job) == data
 
-    def test_source_data_overrides_matching_keys(self):
-        data = {"remote": True, "salary_min": None, "salary_max": None}
-        job = {"source_structured_data": json.dumps({"salary_min": 15000, "salary_max": 20000})}
-        result = _merge_source_structured_data(data, job)
-        assert result["salary_min"] == 15000
-        assert result["salary_max"] == 20000
-        assert result["remote"] is True  # untouched Haiku field survives
 
-    def test_source_data_as_dict_not_json_string_also_works(self):
-        # job dicts fresh from a collector run (not yet round-tripped through
-        # the API) carry source_structured_data as a real dict already.
-        data = {"remote": True}
-        job = {"source_structured_data": {"salary_min": 15000}}
-        result = _merge_source_structured_data(data, job)
-        assert result["salary_min"] == 15000
+def test_normalize_facts_builds_legacy_stack_and_salary_fields():
+    result = _normalize_facts({
+        "skills": [{
+            "canonical_name": "Node.js", "original_name": "Node.js",
+            "requirement": "required", "importance": "core", "confidence": 0.8,
+        }],
+        "stack": [], "stack_required": [], "stack_preferred": [],
+        "compensation_bands": [{
+            "amount_min": 100, "amount_max": 140, "currency": "PLN",
+            "period": "hourly", "compensation_type": "base",
+        }],
+    })
+    assert result["stack"] == ["nodejs"]
+    assert result["stack_required"] == ["nodejs"]
+    assert result["salary_max"] == 140
+    assert result["salary_period"] == "hourly"
 
-    def test_unparseable_source_data_falls_back_to_haiku_only(self):
-        data = {"remote": True}
-        job = {"source_structured_data": "not json"}
-        assert _merge_source_structured_data(data, job) == data
+
+def test_normalize_facts_derives_poland_and_bulgaria_from_eu_remote():
+    result = _normalize_facts({
+        "remote": True, "remote_regions": ["European Union"], "contract_types": ["b2b"],
+    })
+    assert result["country_eligibility"] == [
+        {"country_code": "PL", "eligible": True, "engagement_modes": ["b2b"], "confidence": 0.9, "evidence": "European Union"},
+        {"country_code": "BG", "eligible": True, "engagement_modes": ["b2b"], "confidence": 0.9, "evidence": "European Union"},
+    ]
+
+
+def test_normalize_facts_keeps_unspecified_remote_country_unknown():
+    result = _normalize_facts({"remote": True, "remote_regions": ["Remote"]})
+    assert [item["eligible"] for item in result["country_eligibility"]] == [None, None]
+
+def test_source_data_overrides_matching_keys():
+    data = {"remote": True, "salary_min": None, "salary_max": None}
+    job = {"source_structured_data": json.dumps({"salary_min": 15000, "salary_max": 20000})}
+    result = _merge_source_structured_data(data, job)
+    assert result["salary_min"] == 15000
+    assert result["salary_max"] == 20000
+    assert result["remote"] is True
+
+
+def test_source_data_as_dict_not_json_string_also_works():
+    data = {"remote": True}
+    job = {"source_structured_data": {"salary_min": 15000}}
+    result = _merge_source_structured_data(data, job)
+    assert result["salary_min"] == 15000
+
+
+def test_unparseable_source_data_falls_back_to_haiku_only():
+    data = {"remote": True}
+    job = {"source_structured_data": "not json"}
+    assert _merge_source_structured_data(data, job) == data
 
 
 @patch("extractor.runner.job_repository")
@@ -225,7 +259,7 @@ def test_run_extraction_merges_source_structured_data_over_haiku_output(mock_ext
         "source_structured_data": json.dumps({"salary_min": 15000, "salary_max": 20000, "salary_currency": "PLN"}),
     }]
     run_extraction(jobs)
-    saved = mock_repo.update_structured_data.call_args[0][1]
+    saved = mock_repo.update_facts.call_args.args[4]
     assert saved["salary_min"] == 15000
     assert saved["salary_max"] == 20000
     assert saved["remote"] is True

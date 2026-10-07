@@ -378,7 +378,11 @@ Distillation is triggered as a pipeline step — not on every decision:
 
 `extractor/runner.py` — runs with **Claude Haiku 4.5**, tool-use API (`submit_structured_data`). Runs **before** scoring — the dealbreaker filter and the scorer both read `structured_data`, so a freshly-collected job needs to be extracted before either can use it.
 
-Extracts per-job JSON from the description (first 3000 chars):
+Extraction reads the complete cleaned description retained for the source and writes schema version 2. Besides the compatibility fields consumed by the existing evaluator, it captures role family and specialization, seniority range, responsibilities, normalized skills with required/preferred/core semantics, multiple compensation bands, country eligibility and engagement modes, timezone/core hours, work authorization, EOR/visa signals, languages, company stage, team size, travel, office visits, and on-call duties.
+
+Material values carry evidence and provenance. Source-native API values override text extraction, deterministic normalization maps aliases such as `Node.js` to `nodejs`, and derived PL/BG eligibility remains distinguishable from explicit source data. The extraction request treats posting text as untrusted content and ignores instructions embedded in it.
+
+Example compatibility fields:
 ```json
 {
   "remote": true,
@@ -392,7 +396,7 @@ Extracts per-job JSON from the description (first 3000 chars):
 }
 ```
 
-Fields default to `null` when not explicitly stated — no inference. `salary_period` (hourly/monthly/yearly) exists specifically so a B2B hourly rate is never silently mistaken for an annual figure downstream. Stored via JobAgentWeb as JSON on the shared posting (`job_postings.structured_data`) — extracted once, reused by every user who has the same job. Powers the clickable badge/filter dimensions in the dashboard.
+Fields default to `null` when not explicitly stated. `salary_period` exists so a B2B hourly rate is never silently mistaken for an annual figure downstream. JobAgentWeb stores the full versioned document together with the model, description hash, provenance, and extraction time. Skills, compensation bands, and country eligibility are also projected into indexed relational tables. Changing the schema version places stale jobs back in the extraction queue; `python scripts/extract_jobs.py --limit 200` performs a controlled backfill.
 
 #### 4. Dealbreaker pre-filter
 

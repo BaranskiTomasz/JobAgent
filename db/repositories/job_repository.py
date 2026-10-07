@@ -39,6 +39,25 @@ def get_missing_structured_data() -> list[dict]:
     return api_client.get("/api/jobs/missing-structured-data").json()
 
 
+def get_missing_facts(schema_version: int, limit: int = 200) -> list[dict]:
+    return api_client.get(
+        "/api/jobs/missing-facts", params={"schema_version": schema_version, "limit": limit},
+    ).json()
+
+
+def update_facts(
+    job_id: str, schema_version: int, model: str, content_hash: str,
+    facts: dict, provenance: dict,
+) -> None:
+    api_client.put(f"/api/jobs/{job_id}/facts", json={
+        "schema_version": schema_version,
+        "model": model,
+        "content_hash": content_hash,
+        "facts": facts,
+        "provenance": provenance,
+    })
+
+
 def update_description(job_id: str, description: str) -> None:
     api_client.patch(f"/api/jobs/{job_id}/description", json={"description": description})
 
