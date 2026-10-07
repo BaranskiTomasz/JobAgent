@@ -43,8 +43,8 @@ def catalog_sources(requested: list[str] | None = None) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Collect the shared public remote-job catalog")
     parser.add_argument("--days", type=int, default=7)
-    parser.add_argument("--max-jobs", type=int, default=60)
-    parser.add_argument("--max-jobs-per-source", type=int, default=20)
+    parser.add_argument("--max-jobs", type=int, default=None)
+    parser.add_argument("--max-jobs-per-source", type=int, default=None)
     parser.add_argument("--queries-per-run", type=int, default=2, choices=range(1, 7))
     parser.add_argument("--slot", type=int, default=date.today().toordinal())
     parser.add_argument("--sources", nargs="*", default=None)
@@ -69,8 +69,9 @@ def main() -> int:
     )
     logging.info("Catalog collection complete: found=%s new=%s", result["jobs_found"], result["jobs_new"])
     if result.get("job_ids"):
+        extraction_limit = min(max(args.max_jobs or 2000, 1), 2000)
         pending = job_repository.get_missing_facts(
-            FACT_SCHEMA_VERSION, max(args.max_jobs or 200, 1), catalog=True,
+            FACT_SCHEMA_VERSION, extraction_limit, catalog=True,
         )
         extracted = run_extraction(pending, catalog=True)
         logging.info("Catalog extraction complete: extracted=%s", extracted)

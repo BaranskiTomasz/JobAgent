@@ -129,10 +129,10 @@ The personalized run may use LinkedIn and writes every discovered posting into t
 To populate only the public, non-personalized catalog, use the shorter collection-and-extraction path. LinkedIn is rejected in catalog mode:
 
 ```bash
-python scripts/collect_catalog.py --days 7 --queries-per-run 6 --max-jobs-per-source 20
+python scripts/collect_catalog.py --days 7 --queries-per-run 6
 ```
 
-The default catalog run rotates two of the six categories; `--queries-per-run 6` covers PHP, Python, Node.js, React, Angular, and QA in one run. Use `python scripts/extract_jobs.py --catalog --limit 200` to backfill unextracted shared descriptions from the last 14 days. Use a smaller per-source limit for a smoke test.
+The default catalog run rotates two of the six categories and collects every matching posting in the selected date window, without a global or per-source job cap. `--queries-per-run 6` covers PHP, Python, Node.js, React, Angular, and QA in one run. Use `python scripts/extract_jobs.py --catalog --limit 200` to backfill unextracted shared descriptions from the last 14 days. `--max-jobs` and `--max-jobs-per-source` are optional safeguards intended for smoke tests, not normal catalog collection.
 
 ### Prerequisites
 
@@ -416,7 +416,9 @@ Distillation is triggered as a pipeline step — not on every decision:
 
 #### 3. Structured extraction
 
-`extractor/runner.py` — runs with **Claude Haiku 4.5**, tool-use API (`submit_structured_data`). Runs **before** scoring — the dealbreaker filter and the scorer both read `structured_data`, so a freshly-collected job needs to be extracted before either can use it.
+`extractor/runner.py` — runs with **Claude Haiku 4.5** and tool use. Runs **before** scoring — the dealbreaker filter and the scorer both read `structured_data`, so a freshly-collected job needs to be extracted before either can use it.
+
+Public catalog extraction uses a cost-saving first pass with a small schema containing only remote, hybrid, region, and PL/BG eligibility. Only postings that are explicitly non-remote, hybrid, or unavailable from both supported countries stop there; matching and uncertain postings continue to the complete extraction below. Gate-only facts carry `_extraction_tier=catalog_gate`, so the public queue does not repeatedly process a known ineligible posting. If that posting later enters a user's personal pool, JobAgentWeb deliberately places it back in the personal extraction queue and replaces the gate result with complete facts before scoring.
 
 Extraction reads the complete cleaned description retained for the source and writes schema version 3. Besides the compatibility fields consumed by the existing evaluator, it captures role family and specialization, seniority range, responsibilities, normalized skills with required/preferred/core semantics, multiple compensation bands, country eligibility and engagement modes, timezone/core hours, work authorization, EOR/visa signals, languages, company stage, team size, travel, office visits, and on-call duties.
 
@@ -549,6 +551,8 @@ Divergence cases are fed back into the next distillation run as high-priority si
 | Debate / second opinion | Sonnet 4.6 | ~$0.02/run (top-20 jobs, single call) |
 
 **Distillation runs once per Run Agent / Re-score, not on every decision.** This is the most expensive step; the budget is fixed (~50 jobs in context) regardless of total job count. The dealbreaker filter catches some jobs before scoring ever runs, reducing Sonnet spend for a candidate with a firm salary floor or remote-only requirement.
+
+Catalog extraction caches its static tool schemas for the duration of an active Anthropic cache window. It also uses the small eligibility gate before full extraction, so clearly ineligible catalog postings do not generate the large structured document. Uncertain eligibility always falls through to full extraction to protect recall.
 
 **Listwise ranking + debate are skipped only when the top-20 candidate set and its ranking fingerprint are unchanged** (`ranker/rank_cache.py`). The fingerprint covers the candidate profile, questionnaire, learned preferences, job content and ranking implementation/model inputs, so changing those inputs forces a fresh ranking even when the job IDs stay the same.
 

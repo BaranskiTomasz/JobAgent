@@ -1,7 +1,15 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from extractor.runner import _EXTRACT_TOOL, _merge_source_structured_data, _normalize_facts, extract_job, run_extraction
+from extractor.runner import (
+    _EXTRACT_TOOL,
+    _catalog_gate_rejects,
+    _merge_source_structured_data,
+    _normalize_facts,
+    extract_catalog_gate,
+    extract_job,
+    run_extraction,
+)
 
 
 def _make_tool_response(data: dict, stop_reason="tool_use"):
@@ -35,6 +43,17 @@ def test_extract_job_returns_parsed_dict(mock_get_client):
     assert result["remote"] is True
     assert result["seniority"] == "senior"
     assert "Python" in result["stack"]
+
+
+@patch("extractor.runner._get_client")
+def test_extract_job_caches_static_tool_schema(mock_get_client):
+    mock_get_client.return_value.messages.create.return_value = _make_tool_response({})
+
+    extract_job("Senior Python Developer, remote")
+
+    request = mock_get_client.return_value.messages.create.call_args.kwargs
+    assert request["tools"][0]["cache_control"] == {"type": "ephemeral"}
+    assert request["max_tokens"] == 6000
 
 
 class TestExtractionSchema:
@@ -185,8 +204,9 @@ def test_run_extraction_returns_zero_when_extract_returns_empty(mock_extract, mo
 
 
 @patch("extractor.runner.job_repository")
+@patch("extractor.runner.extract_catalog_gate", return_value={})
 @patch("extractor.runner.extract_job")
-def test_run_extraction_accepts_non_object_evidence(mock_extract, mock_repo):
+def test_run_extraction_accepts_non_object_evidence(mock_extract, mock_gate, mock_repo):
     mock_extract.return_value = {
         "summary": "A role summary.", "remote": True, "evidence": "Remote in Europe",
     }
@@ -198,8 +218,9 @@ def test_run_extraction_accepts_non_object_evidence(mock_extract, mock_repo):
 
 
 @patch("extractor.runner.job_repository")
+@patch("extractor.runner.extract_catalog_gate", return_value={})
 @patch("extractor.runner.extract_job")
-def test_run_extraction_continues_after_one_malformed_job(mock_extract, mock_repo):
+def test_run_extraction_continues_after_one_malformed_job(mock_extract, mock_gate, mock_repo):
     mock_extract.side_effect = [
         {"skills": ["invalid"]},
         {"summary": "Valid summary", "remote": True},
@@ -211,6 +232,54 @@ def test_run_extraction_continues_after_one_malformed_job(mock_extract, mock_rep
 
     assert run_extraction(jobs, catalog=True) == 1
     assert mock_repo.update_facts.call_args.args[0] == "good"
+
+
+def test_catalog_gate_rejects_only_explicit_ineligibility():
+    assert _catalog_gate_rejects({"remote": False}) is True
+    assert _catalog_gate_rejects({"remote": True, "hybrid": True}) is True
+    assert _catalog_gate_rejects({"country_eligibility": [
+        {"country_code": "PL", "eligible": False},
+        {"country_code": "BG", "eligible": False},
+    ]}) is True
+    assert _catalog_gate_rejects({"remote": True, "country_eligibility": [
+        {"country_code": "PL", "eligible": None},
+        {"country_code": "BG", "eligible": False},
+    ]}) is False
+
+
+@patch("extractor.runner.job_repository")
+@patch("extractor.runner.extract_job")
+@patch("extractor.runner.extract_catalog_gate")
+def test_catalog_gate_skips_full_extraction_for_explicitly_ineligible_job(mock_gate, mock_extract, mock_repo):
+    mock_gate.return_value = {
+        "remote": True,
+        "hybrid": False,
+        "remote_regions": ["United States"],
+        "country_eligibility": [
+            {"country_code": "PL", "eligible": False, "engagement_modes": ["unknown"], "evidence": "US only"},
+            {"country_code": "BG", "eligible": False, "engagement_modes": ["unknown"], "evidence": "US only"},
+        ],
+    }
+    jobs = [{"id": "us", "title": "Engineer", "company": "Co", "description": "Remote US only"}]
+
+    assert run_extraction(jobs, catalog=True) == 1
+    mock_extract.assert_not_called()
+    saved = mock_repo.update_facts.call_args.args[4]
+    assert saved["_extraction_tier"] == "catalog_gate"
+
+
+@patch("extractor.runner.job_repository")
+@patch("extractor.runner.extract_job")
+@patch("extractor.runner.extract_catalog_gate")
+def test_catalog_gate_runs_full_extraction_when_eligibility_is_unknown(mock_gate, mock_extract, mock_repo):
+    mock_gate.return_value = {"remote": True, "hybrid": False, "remote_regions": []}
+    mock_extract.return_value = {"remote": True, "hybrid": False, "summary": "Remote role"}
+    jobs = [{"id": "unknown", "title": "Engineer", "company": "Co", "description": "Remote"}]
+
+    assert run_extraction(jobs, catalog=True) == 1
+    mock_extract.assert_called_once()
+    saved = mock_repo.update_facts.call_args.args[4]
+    assert saved["_extraction_tier"] == "full"
 
 
 class TestMergeSourceStructuredData:
