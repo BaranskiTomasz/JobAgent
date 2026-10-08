@@ -22,12 +22,15 @@ def _job(slug="job-1", location="", days_ago=0, title="Senior Python Developer",
 
 
 @pytest.mark.parametrize(
-    ("source_class", "source_name"),
-    [(ArbeitnowSource, "arbeitnow"), (ArbeitnowUKSource, "arbeitnow_uk")],
+    ("source_class", "source_name", "job_location"),
+    [
+        (ArbeitnowSource, "arbeitnow", ""),
+        (ArbeitnowUKSource, "arbeitnow_uk", "Europe"),
+    ],
 )
-def test_maps_remote_jobs(source_class, source_name):
+def test_maps_remote_jobs(source_class, source_name, job_location):
     source = source_class()
-    source._fetch_jobs = MagicMock(return_value=[_job()])
+    source._fetch_jobs = MagicMock(return_value=[_job(location=job_location)])
     result = source.search("Python", "Poland")[0]
     assert result.source == source_name
     assert result.source_id == "job-1"
@@ -136,3 +139,36 @@ def test_duplicate_urls_and_query_variants_are_collapsed():
     result = source.search("Python", "Poland")
 
     assert len(result) == 1
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["United Kingdom", "Remote United Kingdom", "Remote (UK hours)", "London"],
+)
+@pytest.mark.parametrize("candidate", ["Poland", "Bulgaria"])
+def test_uk_source_rejects_uk_restricted_remote_jobs(location, candidate):
+    source = ArbeitnowUKSource()
+    source._fetch_jobs = MagicMock(return_value=[_job(location=location)])
+
+    assert source.search("Python", candidate) == []
+
+
+@pytest.mark.parametrize("location", ["Europe", "Worldwide", "Poland", "Bulgaria"])
+def test_uk_source_accepts_explicit_broad_remote_regions(location):
+    source = ArbeitnowUKSource()
+    item = _job(location=location)
+    item["visa_sponsorship"] = True
+    source._fetch_jobs = MagicMock(return_value=[item])
+
+    candidate = "Bulgaria" if location == "Bulgaria" else "Poland"
+    result = source.search("Python", candidate)
+
+    assert len(result) == 1
+    assert result[0].source_structured_data["visa_sponsorship"] is True
+
+
+def test_uk_source_rejects_ambiguous_remote_location():
+    source = ArbeitnowUKSource()
+    source._fetch_jobs = MagicMock(return_value=[_job(location="Remote job")])
+
+    assert source.search("Python", "Poland") == []

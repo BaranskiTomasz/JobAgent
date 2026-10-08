@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from html import unescape
+import re
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -10,6 +11,14 @@ from collector.query_matcher import job_matches_query
 from collector.utils import strip_html
 
 _MAX_PAGES = 50
+_BROAD_REMOTE_REGION = re.compile(
+    r"\b(worldwide|global|anywhere|europe|european|emea|eu|poland|polska|bulgaria)\b",
+    re.IGNORECASE,
+)
+_UK_RESTRICTION = re.compile(
+    r"\b(uk|united kingdom|britain|british|england|scotland|wales|northern ireland)\b",
+    re.IGNORECASE,
+)
 
 
 def _published_at(value: object) -> datetime | None:
@@ -117,6 +126,11 @@ class ArbeitnowSource(JobSource):
         self._jobs_cache = jobs
         return jobs
 
+    def _location_allowed(self, job_location: str, candidate_location: str) -> bool:
+        if not job_location or job_location.casefold() in {"remote", "worldwide"}:
+            return True
+        return location_matches(job_location, candidate_location)
+
     def search(
         self,
         title: str,
@@ -160,11 +174,7 @@ class ArbeitnowSource(JobSource):
             if url_key in seen_keys:
                 continue
             job_location = str(job.get("location") or "").strip()
-            if (
-                job_location
-                and job_location.casefold() not in {"remote", "worldwide"}
-                and not location_matches(job_location, location)
-            ):
+            if not self._location_allowed(job_location, location):
                 continue
             geo_matched += 1
             if max_results and len(results) >= max_results:
@@ -183,6 +193,11 @@ class ArbeitnowSource(JobSource):
                     "remote_available": True,
                     "remote_regions": [job_location] if job_location else [],
                     "_salary_disclosed": False,
+                    **(
+                        {"visa_sponsorship": bool(job["visa_sponsorship"])}
+                        if job.get("visa_sponsorship") is not None
+                        else {}
+                    ),
                 },
             ))
             seen_keys.add(url_key)
@@ -202,3 +217,10 @@ class ArbeitnowSource(JobSource):
 class ArbeitnowUKSource(ArbeitnowSource):
     source_name = "arbeitnow_uk"
     api_url = "https://www.arbeitnow.co.uk/api/job-board-api"
+
+    def _location_allowed(self, job_location: str, candidate_location: str) -> bool:
+        if not job_location or _UK_RESTRICTION.search(job_location):
+            return False
+        if not _BROAD_REMOTE_REGION.search(job_location):
+            return False
+        return location_matches(job_location, candidate_location)
