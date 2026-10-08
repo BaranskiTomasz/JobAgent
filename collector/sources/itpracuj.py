@@ -22,13 +22,15 @@ ideal but real, substantive content, good enough for scoring, without the CAPTCH
 """
 import json
 import logging
+import math
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 from collector.base import JobSource, RawJob
 from collector.location import workplace_suffix
+from collector.query_matcher import query_matches
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,7 @@ class ItPracujSource(JobSource):
         self._playwright = None
         self._browser = None
         self._page = None
+        self.last_search_diagnostics = {}
 
     @property
     def name(self) -> str:
@@ -98,6 +101,12 @@ class ItPracujSource(JobSource):
         self._browser = None
         self._playwright = None
         self._page = None
+        self.last_search_diagnostics = {}
+
+    @staticmethod
+    def _url_key(url: str) -> str:
+        parsed = urlsplit((url or "").strip())
+        return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), "", ""))
 
     def search(
         self,
@@ -108,8 +117,10 @@ class ItPracujSource(JobSource):
         known_urls: set[str] | None = None,
     ) -> list[RawJob]:
         if location.strip().lower() not in _POLAND_ALIASES:
+            self.set_search_diagnostics(source_status="skipped", reason="location_not_poland", upstream_found=0)
             return []
         if not title.strip():
+            self.set_search_diagnostics(source_status="skipped", reason="empty_query", upstream_found=0)
             return []
 
         days = days_back if days_back is not None else self._days_back
@@ -120,54 +131,104 @@ class ItPracujSource(JobSource):
             self._page.goto(url, wait_until="domcontentloaded", timeout=20_000)
         except PlaywrightTimeout:
             logger.warning(f"it.pracuj.pl search timed out for title={title!r}")
+            self.set_search_diagnostics(source_status="error", source_error="search timeout", upstream_found=0)
+            return []
+        except Exception as exc:
+            self.set_search_diagnostics(source_status="error", source_error=str(exc), upstream_found=0)
             return []
 
         data = _read_next_data(self._page)
         if not data:
+            self.set_search_diagnostics(source_status="error", source_error="missing or blocked __NEXT_DATA__", upstream_found=0)
             return []
 
         job_offers = _find_query(data, "jobOffers") or {}
-        grouped = job_offers.get("groupedOffers", [])
-        # Only the first page (default 50 grouped results) is fetched, plenty for a
-        # daily incremental run; deeper pagination isn't implemented yet.
-
-        results: list[RawJob] = []
-        for group in grouped:
-            if max_results and len(results) >= max_results:
+        grouped = job_offers.get("groupedOffers", []) if isinstance(job_offers, dict) else []
+        if not isinstance(grouped, list):
+            grouped = []
+        total = int(job_offers.get("offersTotalCount") or len(grouped)) if isinstance(job_offers, dict) else len(grouped)
+        page_size = len(grouped) or 50
+        total_pages = max(1, math.ceil(total / page_size))
+        pages_fetched = 1
+        pagination_error = None
+        for next_page in range(2, total_pages + 1):
+            try:
+                self._page.goto(f"{url}?page={next_page}", wait_until="domcontentloaded", timeout=20_000)
+                next_data = _read_next_data(self._page)
+                next_jobs = _find_query(next_data or {}, "jobOffers") or {}
+                next_groups = next_jobs.get("groupedOffers", []) if isinstance(next_jobs, dict) else []
+                if not isinstance(next_groups, list):
+                    break
+                grouped.extend(next_groups)
+                pages_fetched = next_page
+            except Exception as exc:
+                pagination_error = str(exc)
                 break
 
+        results: list[RawJob] = []
+        known_keys = {self._url_key(url) for url in (known_urls or set())}
+        query_matched = date_matched = geo_matched = known_url_filtered = 0
+        seen_urls: set[str] = set()
+        for group in grouped:
             offers = group.get("offers") or []
             if not offers:
                 continue
             offer_url = offers[0].get("offerAbsoluteUri")
             if not offer_url:
                 continue
+            description_preview = group.get("jobDescription") or ""
+            if not query_matches(title, group.get("jobTitle") or "", description_preview):
+                continue
+            query_matched += 1
 
             pub_str = group.get("lastPublicated")
             try:
                 pub_dt = datetime.fromisoformat(pub_str.replace("Z", "+00:00")) if pub_str else None
-            except ValueError:
+            except (ValueError, TypeError, AttributeError):
                 pub_dt = None
-            if pub_dt and pub_dt < cutoff:
+            if not pub_dt or pub_dt < cutoff:
                 continue
+            date_matched += 1
 
-            if known_urls and offer_url in known_urls:
+            canonical_url = self._url_key(offer_url)
+            if canonical_url in seen_urls:
+                continue
+            seen_urls.add(canonical_url)
+            if known_keys and canonical_url in known_keys:
+                known_url_filtered += 1
                 continue
 
             city = offers[0].get("displayWorkplace")
             modes = {_WORK_MODE_TOKENS.get(m.lower()) for m in (group.get("workModes") or [])}
             modes.discard(None)
             location_str = f"{city}, Poland{workplace_suffix(modes)}" if city else f"Poland{workplace_suffix(modes)}"
+            geo_matched += 1
+            source_data = (
+                {"remote": True, "remote_available": True, "remote_regions": ["Poland"]}
+                if "remote" in modes
+                else None
+            )
+
+            if max_results and len(results) >= max_results:
+                continue
 
             results.append(RawJob(
                 title=group.get("jobTitle", ""),
                 company=group.get("companyName", ""),
                 location=location_str,
-                url=offer_url,
+                url=canonical_url,
                 source=self.name,
-                source_id=str(offers[0].get("partitionId") or group.get("groupId") or ""),
-                description=group.get("jobDescription") or None,
+                source_id=str(offers[0].get("partitionId") or group.get("groupId") or canonical_url),
+                description=description_preview or None,
                 posted_at=pub_dt.isoformat() if pub_dt else None,
+                source_structured_data=source_data,
             ))
-
+        self.set_search_diagnostics(
+            upstream_found=len(grouped), query_matched=query_matched,
+            date_matched=date_matched, geo_matched=geo_matched,
+            known_url_filtered=known_url_filtered,
+            pages_fetched=pages_fetched,
+            source_status="partial" if pagination_error else "empty" if not grouped else "ok",
+            source_error=pagination_error,
+        )
         return results

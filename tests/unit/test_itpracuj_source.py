@@ -156,6 +156,29 @@ class TestItPracujSourceSearch:
         results = src.search("PHP", "Poland", known_urls=known)
         assert results == []
 
+    def test_known_url_is_canonical_and_remote_fact_is_retained(self):
+        src = _make_source()
+        group = _group(offer_url="https://www.pracuj.pl/praca/remote,oferta,1?utm=career")
+        src._page.eval_on_selector.return_value = json.dumps(_search_payload([group]))
+        result = src.search("PHP", "Poland")[0]
+        assert result.url == "https://www.pracuj.pl/praca/remote,oferta,1"
+        assert result.source_structured_data == {
+            "remote": True,
+            "remote_available": True,
+            "remote_regions": ["Poland"],
+        }
+        assert src.search("PHP", "Poland", known_urls={"https://www.pracuj.pl/praca/remote,oferta,1/"}) == []
+
+    def test_follows_numbered_pages_from_total_count(self):
+        src = _make_source()
+        first = _search_payload([_group(offer_url="https://www.pracuj.pl/praca/a,oferta,1", partition_id=1)])
+        first["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["offersTotalCount"] = 2
+        second = _search_payload([_group(offer_url="https://www.pracuj.pl/praca/b,oferta,2", partition_id=2)])
+        src._page.eval_on_selector.side_effect = [json.dumps(first), json.dumps(second)]
+        results = src.search("PHP", "Poland")
+        assert len(results) == 2
+        assert src.last_search_diagnostics["pages_fetched"] == 2
+
     def test_filters_by_date(self):
         src = _make_source()
         fresh = _group(offer_url="https://www.pracuj.pl/praca/fresh,oferta,1", days_ago=1)
