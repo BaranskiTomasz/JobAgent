@@ -21,6 +21,7 @@ just keyed by nothing (there's only one list to fetch) rather than by search ter
 """
 import logging
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -60,6 +61,8 @@ class SolidJobsSource(JobSource):
         self._days_back = days_back
         self._client: httpx.Client | None = None
         self._offers_cache: list[dict] | None = None
+        self._fetch_error: str | None = None
+        self.last_search_diagnostics = {}
 
     @property
     def name(self) -> str:
@@ -68,13 +71,22 @@ class SolidJobsSource(JobSource):
     def __enter__(self):
         self._client = httpx.Client(headers=_HEADERS, timeout=30, follow_redirects=True)
         self._offers_cache = None
+        self._fetch_error = None
+        self.last_search_diagnostics = {}
         return self
+
+    @staticmethod
+    def _url_key(url: str) -> str:
+        parsed = urlsplit((url or "").strip())
+        return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), "", ""))
 
     def __exit__(self, *args):
         if self._client:
             self._client.close()
         self._client = None
         self._offers_cache = None
+        self._fetch_error = None
+        self.last_search_diagnostics = {}
 
     def _fetch_all_offers(self) -> list[dict]:
         if self._offers_cache is not None:
@@ -87,14 +99,18 @@ class SolidJobsSource(JobSource):
             )
         except Exception as e:
             logger.warning(f"solid.jobs list request failed: {e}")
+            self._fetch_error = str(e)
             self._offers_cache = []
             return []
         if resp.status_code != 200:
+            self._fetch_error = f"HTTP {resp.status_code}"
             self._offers_cache = []
             return []
         try:
-            self._offers_cache = resp.json()
+            payload = resp.json()
+            self._offers_cache = payload if isinstance(payload, list) else payload.get("offers", []) if isinstance(payload, dict) else []
         except ValueError:
+            self._fetch_error = "invalid JSON response"
             self._offers_cache = []
         return self._offers_cache
 
@@ -134,8 +150,10 @@ class SolidJobsSource(JobSource):
         known_urls: set[str] | None = None,
     ) -> list[RawJob]:
         if location.strip().lower() not in _POLAND_ALIASES:
+            self.set_search_diagnostics(source_status="skipped", reason="location_not_poland", upstream_found=0)
             return []
         if not title.strip():
+            self.set_search_diagnostics(source_status="skipped", reason="empty_query", upstream_found=0)
             return []
 
         days = days_back if days_back is not None else self._days_back
@@ -143,8 +161,12 @@ class SolidJobsSource(JobSource):
         offers = self._fetch_all_offers()
 
         results: list[RawJob] = []
+        known_keys = {self._url_key(url) for url in (known_urls or set())}
         query_matched = 0
         date_matched = 0
+        geo_matched = 0
+        detail_attempted = detail_failed = known_url_filtered = 0
+        seen_urls: set[str] = set()
         for offer in offers:
 
             job_title = offer.get("jobTitle", "")
@@ -156,9 +178,13 @@ class SolidJobsSource(JobSource):
             valid_from = offer.get("validFrom")
             try:
                 valid_dt = datetime.fromisoformat(valid_from) if valid_from else None
-            except ValueError:
+                if valid_dt and valid_dt.tzinfo is None:
+                    valid_dt = valid_dt.replace(tzinfo=timezone.utc)
+                elif valid_dt:
+                    valid_dt = valid_dt.astimezone(timezone.utc)
+            except (ValueError, TypeError, AttributeError):
                 valid_dt = None
-            if valid_dt and valid_dt < cutoff:
+            if not valid_dt or valid_dt < cutoff:
                 continue
             date_matched += 1
 
@@ -168,29 +194,64 @@ class SolidJobsSource(JobSource):
                 continue
 
             job_url = _PAGE_URL.format(id=offer_id, slug=slug)
-            if known_urls and job_url in known_urls:
+            canonical_url = self._url_key(job_url)
+            if canonical_url in seen_urls:
+                continue
+            seen_urls.add(canonical_url)
+            if known_keys and canonical_url in known_keys:
+                known_url_filtered += 1
                 continue
 
             city = offer.get("companyCity")
             mode = _REMOTE_MODE_TOKENS.get((offer.get("remotePossible") or "").strip().lower())
             modes = {mode} if mode else set()
             location_str = f"{city}, Poland{workplace_suffix(modes)}" if city else f"Poland{workplace_suffix(modes)}"
+            geo_matched += 1
 
             if max_results and len(results) >= max_results:
                 continue
+            detail_attempted += 1
+            description = self.fetch_description(job_url)
+            if description is None:
+                detail_failed += 1
+            source_data = {}
+            if "remote" in modes:
+                source_data = {
+                    "remote": True,
+                    "remote_available": True,
+                    "remote_regions": ["Poland"],
+                }
+            salary = offer.get("salary") if isinstance(offer.get("salary"), dict) else {}
+            salary_min = salary.get("from") or offer.get("salaryMin")
+            salary_max = salary.get("to") or offer.get("salaryMax")
+            currency = salary.get("currency") or offer.get("salaryCurrency")
+            if salary_min is not None or salary_max is not None:
+                source_data["_salary_disclosed"] = True
+                if salary_min is not None:
+                    source_data["salary_min"] = salary_min
+                if salary_max is not None:
+                    source_data["salary_max"] = salary_max
+                if currency:
+                    source_data["salary_currency"] = currency
             results.append(RawJob(
                 title=job_title,
                 company=offer.get("companyName", ""),
                 location=location_str,
-                url=job_url,
+                url=canonical_url,
                 source=self.name,
                 source_id=str(offer_id),
-                description=self.fetch_description(job_url),
+                description=description,
                 posted_at=valid_dt.isoformat() if valid_dt else None,
+                source_structured_data=source_data or None,
             ))
 
         self.set_search_diagnostics(
             upstream_found=len(offers), query_matched=query_matched,
-            date_matched=date_matched, geo_matched=date_matched,
+            date_matched=date_matched, geo_matched=geo_matched,
+            known_url_filtered=known_url_filtered,
+            source_status="error" if self._fetch_error else "empty" if not offers else "ok",
+            source_error=self._fetch_error,
+            detail_attempted=detail_attempted,
+            detail_failed=detail_failed,
         )
         return results

@@ -128,6 +128,28 @@ class TestSolidJobsSearch:
         assert results == []
         src.fetch_description.assert_not_called()
 
+    def test_known_url_is_canonical_and_remote_fact_is_retained(self):
+        src = _make_source()
+        offer = _offer(offer_id=5, slug="remote-job", remote="W całości")
+        src._client.get.return_value = MagicMock(status_code=200, json=lambda: [offer])
+        result = src.search("PHP", "Poland")[0]
+        assert result.source_structured_data == {
+            "remote": True,
+            "remote_available": True,
+            "remote_regions": ["Poland"],
+        }
+        assert src.search("PHP", "Poland", known_urls={result.url + "/?utm=career"}) == []
+
+    def test_native_salary_facts_are_retained(self):
+        src = _make_source()
+        offer = _offer()
+        offer["salary"] = {"from": 15000, "to": 22000, "currency": "PLN"}
+        src._client.get.return_value = MagicMock(status_code=200, json=lambda: [offer])
+        facts = src.search("PHP", "Poland")[0].source_structured_data
+        assert facts["salary_min"] == 15000
+        assert facts["salary_max"] == 22000
+        assert facts["salary_currency"] == "PLN"
+
     def test_filters_by_date(self):
         src = _make_source()
         fresh = _offer(offer_id=1, slug="fresh", days_ago=1)
@@ -168,6 +190,7 @@ class TestSolidJobsSearch:
         src._client.get.side_effect = Exception("network error")
         results = src.search("PHP", "Poland")
         assert results == []
+        assert src.last_search_diagnostics["source_status"] == "error"
 
     def test_posted_at_captures_valid_from(self):
         # validFrom was already parsed for the days_back cutoff, then discarded,
