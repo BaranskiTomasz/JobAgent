@@ -228,6 +228,35 @@ class TestTheProtocolSourceSearch:
         assert results == []
         src.fetch_description.assert_not_called()
 
+    def test_known_url_is_canonical_and_remote_fact_is_retained(self):
+        src = _make_source()
+        offer = _offer(offer_url_name="remote,oferta,1", work_modes=["remote"])
+        offer.pop("id")
+        src._page.eval_on_selector.return_value = json.dumps(_search_payload([offer]))
+        result = src.search("PHP", "Poland")[0]
+        assert result.source_id == "https://theprotocol.it/praca/remote,oferta,1"
+        assert result.source_structured_data == {
+            "remote": True,
+            "remote_available": True,
+            "remote_regions": ["Poland"],
+        }
+        assert src.search("PHP", "Poland", known_urls={result.url + "/?utm=career"}) == []
+
+    def test_follows_numbered_listing_pages(self):
+        src = _make_source()
+        first = _offer(offer_url_name="first,oferta,1")
+        second = _offer(offer_url_name="second,oferta,2")
+        first_payload = _search_payload([first])
+        first_payload["props"]["pageProps"]["offersResponse"]["page"] = {"number": 1, "size": 1, "count": 2}
+        second_payload = _search_payload([second])
+        src._page.eval_on_selector.side_effect = [json.dumps(first_payload), json.dumps(second_payload)]
+        results = src.search("PHP", "Poland")
+        assert [job.url for job in results] == [
+            "https://theprotocol.it/praca/first,oferta,1",
+            "https://theprotocol.it/praca/second,oferta,2",
+        ]
+        assert src.last_search_diagnostics["pages_fetched"] == 2
+
     def test_filters_by_date(self):
         src = _make_source()
         fresh = _offer(offer_url_name="fresh,oferta,1", days_ago=1)
