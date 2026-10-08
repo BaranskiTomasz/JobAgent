@@ -78,6 +78,8 @@ JobAgent currently collects from 19 source integrations:
 
 International sources are filtered for remote roles that can be performed from the candidate's selected country. A generic “remote” label is not treated as worldwide eligibility: explicit restrictions such as US-only are rejected for a candidate working from Poland.
 
+justjoin.it uses the server-rendered Next.js/RSC listing payload for the complete result pages exposed by the board and Playwright only for detail descriptions. Search applies a local query guard, publication-date cutoff, canonical known-URL filtering, and retains salary, skills, seniority, and native remote/Poland facts. It is intentionally routed only for Poland/Polska/PL; request and funnel failures are exposed in source diagnostics. Because the board is Poland-focused, this avoids treating its listings as worldwide remote inventory.
+
 Remotive is downloaded once per collector run and filtered locally for every configured query and country. This stays within the provider's published request-frequency guidance while preserving broad-role recall; public listings retain the Remotive source attribution and application link required by its API terms.
 
 Remote OK combines its newest generic feed with canonical tag feeds selected through source-specific aliases such as `node`, `golang`, `full-stack`, and `machine-learning`. Tag failures degrade the search to the generic feed and are reported as partial instead of being mistaken for an empty source. Technology matching ignores noisy feed tags and uses the title and description; source-native remote and disclosed annual USD salary fields remain available to extraction.

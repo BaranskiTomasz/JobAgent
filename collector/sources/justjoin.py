@@ -12,15 +12,17 @@ This is a Poland-only board, search() only fires anything when `location` resolv
 Poland, to avoid firing the same query once per configured country for no reason.
 """
 import json
-import re
 import logging
+import re
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 from collector.base import JobSource, RawJob
 from collector.location import workplace_suffix
+from collector.query_matcher import query_matches
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,26 @@ def _parse_rsc_offers(html: str) -> list[dict]:
     dehydrated react-query state with the OFFERS listing (other row kinds, e.g.
     text/hint rows, use a different micro-syntax we don't need to understand).
     """
+    collected: list[dict] = []
+    seen: set[str] = set()
+
+    def add_offer(offer: dict) -> None:
+        if not all(offer.get(field) for field in ("slug", "title", "publishedAt")):
+            return
+        key = str(offer.get("guid") or offer.get("slug") or offer.get("id"))
+        if key not in seen:
+            seen.add(key)
+            collected.append(offer)
+
+    def find_offers(value) -> None:
+        if isinstance(value, dict):
+            add_offer(value)
+            for child in value.values():
+                find_offers(child)
+        elif isinstance(value, list):
+            for child in value:
+                find_offers(child)
+
     for m in re.finditer(r"self\.__next_f\.push\(", html):
         start = m.end() - 1
         depth = 0
@@ -66,19 +88,21 @@ def _parse_rsc_offers(html: str) -> list[dict]:
         if not (isinstance(arr, list) and len(arr) == 2 and isinstance(arr[1], str)):
             continue
         chunk = arr[1]
-        if '"companyName"' not in chunk or '"employmentTypes"' not in chunk:
+        if '"companyName"' not in chunk or '"publishedAt"' not in chunk:
             continue
 
         for line in chunk.split("\n"):
-            if '"queryKey"' not in line or "OFFERS" not in line:
-                continue
             try:
                 colon_idx = line.index(":")
                 row = json.loads(line[colon_idx + 1:])
-                queries = row[3]["state"]["queries"]
             except Exception:
                 continue
+            find_offers(row)
 
+            try:
+                queries = row[3]["state"]["queries"]
+            except (IndexError, KeyError, TypeError):
+                continue
             for q in queries:
                 key = q.get("queryKey")
                 if key and key[0] == "OFFERS":
@@ -88,10 +112,12 @@ def _parse_rsc_offers(html: str) -> list[dict]:
                         continue
                     offers = []
                     for page in pages:
-                        offers.extend(page.get("data", []))
-                    if offers:
-                        return offers
-    return []
+                        if isinstance(page, dict) and isinstance(page.get("data"), list):
+                            offers.extend(page["data"])
+                    for offer in offers:
+                        if isinstance(offer, dict):
+                            add_offer(offer)
+    return collected
 
 
 # extractor/runner.py's schema, same keys/enums, so this can be overlaid
@@ -150,6 +176,7 @@ class JustJoinSource(JobSource):
         self._playwright = None
         self._browser = None
         self._page = None
+        self.last_search_diagnostics = {}
 
     @property
     def name(self) -> str:
@@ -173,6 +200,14 @@ class JustJoinSource(JobSource):
         self._browser = None
         self._playwright = None
         self._page = None
+        self.last_search_diagnostics = {}
+
+    @staticmethod
+    def _url_key(url: str) -> str:
+        parsed = urlsplit((url or "").strip())
+        return urlunsplit(
+            (parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), "", "")
+        )
 
     def fetch_description(self, url: str) -> str | None:
         try:
@@ -225,6 +260,7 @@ class JustJoinSource(JobSource):
         known_urls: set[str] | None = None,
     ) -> list[RawJob]:
         if location.strip().lower() not in _POLAND_ALIASES:
+            self.set_search_diagnostics(source_status="skipped", reason="location_not_poland", upstream_found=0)
             return []
 
         days = days_back if days_back is not None else self._days_back
@@ -237,47 +273,81 @@ class JustJoinSource(JobSource):
             resp = self._client.get(_SEARCH_URL, params={"keyword": title})
         except Exception as e:
             logger.warning(f"justjoin.it request failed: {e}")
+            self.set_search_diagnostics(source_status="error", source_error=str(e), upstream_found=0)
             return []
         if resp.status_code != 200:
+            self.set_search_diagnostics(source_status="error", source_error=f"HTTP {resp.status_code}", upstream_found=0)
             return []
 
         offers = _parse_rsc_offers(resp.text)
         if not offers:
+            self.set_search_diagnostics(source_status="ok", upstream_found=0)
             return []
 
         results: list[RawJob] = []
+        known_keys = {self._url_key(url) for url in (known_urls or set())}
+        query_matched = date_matched = geo_matched = known_url_filtered = 0
         for offer in offers:
-            if max_results and len(results) >= max_results:
-                break
-
             slug = offer.get("slug")
             if not slug:
                 continue
+            offer_title = offer.get("title") or ""
+            skills = " ".join(
+                str(skill)
+                for skill in (offer.get("requiredSkills") or [])
+                + (offer.get("niceToHaveSkills") or [])
+            )
+            if not query_matches(title, offer_title, skills):
+                continue
+            query_matched += 1
 
             pub_str = offer.get("publishedAt") or offer.get("lastPublishedAt")
             try:
                 pub_dt = datetime.fromisoformat(pub_str.replace("Z", "+00:00")) if pub_str else None
-            except ValueError:
+            except (ValueError, TypeError, AttributeError):
                 pub_dt = None
-            if pub_dt and pub_dt < cutoff:
+            if not pub_dt:
                 continue
+            if pub_dt.tzinfo is None:
+                pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+            if pub_dt < cutoff:
+                continue
+            date_matched += 1
 
             url = _DETAIL_URL.format(slug=slug)
-            if known_urls and url in known_urls:
+            if known_keys and self._url_key(url) in known_keys:
+                known_url_filtered += 1
                 continue
 
             city = offer.get("city") or "Poland"
-            modes = {offer.get("workplaceType")} if offer.get("workplaceType") else set()
+            modes = {str(offer.get("workplaceType")).casefold()} if offer.get("workplaceType") else set()
+            geo_matched += 1
+            source_data = _extract_source_structured_data(offer)
+            if "remote" in modes:
+                source_data.update({
+                    "remote": True,
+                    "remote_available": True,
+                    "remote_regions": ["Poland"],
+                })
+            if max_results and len(results) >= max_results:
+                continue
             results.append(RawJob(
                 title=offer.get("title", ""),
                 company=offer.get("companyName", ""),
                 location=f"{city}, Poland{workplace_suffix(modes)}",
                 url=url,
                 source=self.name,
-                source_id=offer.get("guid"),
+                source_id=offer.get("guid") or self._url_key(url),
                 description=self.fetch_description(url),
                 posted_at=pub_dt.isoformat() if pub_dt else None,
-                source_structured_data=_extract_source_structured_data(offer) or None,
+                source_structured_data=source_data or None,
             ))
-
+        self.set_search_diagnostics(
+            source_status="empty" if not offers else "ok",
+            upstream_found=len(offers),
+            query_matched=query_matched,
+            date_matched=date_matched,
+            geo_matched=geo_matched,
+            known_url_filtered=known_url_filtered,
+        )
         return results

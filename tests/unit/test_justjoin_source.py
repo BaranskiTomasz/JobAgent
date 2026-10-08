@@ -60,9 +60,25 @@ class TestParseRscOffers:
         assert offers[0]["companyName"] == "Acme"
 
     def test_extracts_multiple_offers(self):
-        html = _offers_html([_offer(slug="a"), _offer(slug="b", title="Python Developer")])
+        html = _offers_html([
+            _offer(slug="a", guid="a"),
+            _offer(slug="b", guid="b", title="Python Developer"),
+        ])
         offers = _parse_rsc_offers(html)
         assert len(offers) == 2
+
+    def test_merges_offers_from_multiple_rsc_chunks_without_duplicates(self):
+        html = _offers_html([_offer(slug="a", guid="a")]) + _offers_html([_offer(slug="b", guid="b"), _offer(slug="a", guid="a")])
+        offers = _parse_rsc_offers(html)
+        assert [offer["slug"] for offer in offers] == ["a", "b"]
+
+    def test_extracts_offers_from_current_direct_rsc_shape(self):
+        payload = json.dumps(["$", {"initial": {"items": [_offer()]}}])
+        html = _push_script(f"89:{payload}")
+
+        offers = _parse_rsc_offers(html)
+
+        assert [offer["slug"] for offer in offers] == ["acme-php-developer"]
 
     def test_no_offers_query_returns_empty(self):
         html = _push_script('99:["$","$Lxx",null,{"state":{"queries":[]}}]')
@@ -140,7 +156,7 @@ class TestJustJoinSourceSearch:
 
     def test_respects_max_results(self):
         src = _make_source()
-        offers = [_offer(slug=f"job-{i}") for i in range(5)]
+        offers = [_offer(slug=f"job-{i}", guid=f"job-{i}") for i in range(5)]
         src._client.get.return_value = MagicMock(status_code=200, text=_offers_html(offers))
         results = src.search("PHP Developer", "Poland", max_results=2)
         assert len(results) == 2
@@ -190,12 +206,30 @@ class TestJustJoinSourceSearch:
         src._client.get.side_effect = Exception("network error")
         results = src.search("PHP Developer", "Poland")
         assert results == []
+        assert src.last_search_diagnostics["source_status"] == "error"
 
     def test_empty_offers_returns_empty(self):
         src = _make_source()
         src._client.get.return_value = MagicMock(status_code=200, text="<html></html>")
         results = src.search("PHP Developer", "Poland")
         assert results == []
+        assert src.last_search_diagnostics["upstream_found"] == 0
+
+    def test_local_query_guard_drops_upstream_keyword_noise(self):
+        src = _make_source()
+        src._client.get.return_value = MagicMock(
+            status_code=200, text=_offers_html([_offer(title="Java Developer")])
+        )
+        assert src.search("PHP Developer", "Poland") == []
+
+    def test_known_url_matching_is_canonical_and_remote_fact_is_native(self):
+        src = _make_source()
+        offer = _offer(slug="remote-job", workplace_type="remote")
+        src._client.get.return_value = MagicMock(status_code=200, text=_offers_html([offer]))
+        result = src.search("PHP Developer", "Poland")
+        assert result[0].source_structured_data["remote_available"] is True
+        assert result[0].source_structured_data["remote_regions"] == ["Poland"]
+        assert src.search("PHP Developer", "Poland", known_urls={"https://justjoin.it/job-offer/remote-job/"}) == []
 
     def test_source_structured_data_captures_salary_and_skills(self):
         # Regression: justjoin.it discloses salary/skills as structured API
