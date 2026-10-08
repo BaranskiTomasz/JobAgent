@@ -116,7 +116,11 @@ def test_lever_maps_public_board_response():
     result = source._fetch_board({"name": "Acme", "slug": "acme"})[0]
     assert result.source == "lever"
     assert result.source_id == "acme:job-42"
-    assert result.source_structured_data == {"remote": True, "remote_regions": ["Remote - Europe"]}
+    assert result.source_structured_data == {
+        "remote": True,
+        "remote_available": True,
+        "remote_regions": ["Remote - Europe"],
+    }
 
 
 def test_ashby_maps_public_board_response():

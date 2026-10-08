@@ -92,7 +92,11 @@ Arbeitnow Europe is fetched from its paginated public JSON API and filtered loca
 
 Arbeitnow UK uses the provider's separate UK feed and requires explicit Poland, Bulgaria, European, EMEA, or worldwide eligibility. UK-restricted and ambiguous bare-remote locations are not treated as evidence that the role can legally be performed from Poland or Bulgaria. The feed's visa-sponsorship flag is retained as source-native data.
 
+Hacker News collection discovers the newest monthly “Who is hiring?” story through Algolia, then reads the complete story item and its top-level comments. It selects the newest matching thread rather than trusting search-result order, preserves the comment ID/canonical HN URL, and rejects ambiguous remote or country-restricted listings unless the text explicitly supports the requested country (including Poland or Bulgaria).
+
 Greenhouse collection reads every configured company board through the official public Boards API with full job content. Boards are fetched concurrently, individual failures are reported as partial collection instead of being hidden, and canonical URLs are used for known-job filtering. Greenhouse has no global job index, so coverage is intentionally limited to the maintained company list in `collector/sources/ats_companies.json`; adding a company means adding its public board slug.
+
+Lever collection follows the official public Postings API pagination for every configured company, preserves all returned locations and native `workplaceType`, and reports individual board or later-page failures without discarding already downloaded pages. Canonical URLs prevent tracking parameters from creating duplicate known jobs. Like Greenhouse, coverage is defined by the maintained public board registry rather than a global Lever index.
 
 Jobicy's unauthenticated JSON API exposes a seven-day feed with at most 200 jobs per page. JobAgent follows the API's opaque cursor until completion, caches each normalized tag request for the active source context, and falls back to the generic feed for queries shorter than the API's 3-character tag minimum (for example, QA), applying the shared query matcher locally. Publication dates, explicit geo restrictions (including Poland/Bulgaria via the shared country matcher), known URLs, stable API IDs, salary and seniority fields are retained; API pagination, partial cursor reads, and funnel counts are visible in collection diagnostics. Jobicy's fair-use guidance recommends no automated synchronization more often than hourly, preserving Jobicy attribution and the canonical application URL.
 
@@ -613,7 +617,7 @@ JobAgent/
 │       ├── hackernews.py           # HN Who's Hiring via Algolia API
 │       ├── ats.py                  # Shared public ATS board collector
 │       ├── greenhouse.py           # Greenhouse public board API
-│       ├── lever.py                # Lever public postings API
+│       ├── lever.py                # Lever public postings API (paged board reads)
 │       ├── ashby.py                # Ashby public posting API
 │       ├── ats_companies.json      # Curated company board registry
 │       ├── justjoin.py             # justjoin.it — embedded JSON + Playwright for descriptions
