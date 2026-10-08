@@ -19,6 +19,18 @@ CATALOG_QUERIES = (
     "React Developer",
     "Angular Developer",
     "QA Engineer",
+    "Java Developer",
+    ".NET Developer",
+    "Go Developer",
+    "Software Developer",
+    "Software Engineer",
+    "Backend Developer",
+    "Frontend Developer",
+    "Full Stack Developer",
+    "Mobile Developer",
+    "DevOps Engineer",
+    "Data Engineer",
+    "Machine Learning Engineer",
 )
 CATALOG_COUNTRIES = ("Poland", "Bulgaria")
 CATALOG_EXCLUDED_SOURCES = {"linkedin"}
@@ -45,7 +57,10 @@ def main() -> int:
     parser.add_argument("--days", type=int, default=7)
     parser.add_argument("--max-jobs", type=int, default=None)
     parser.add_argument("--max-jobs-per-source", type=int, default=None)
-    parser.add_argument("--queries-per-run", type=int, default=2, choices=range(1, 7))
+    parser.add_argument(
+        "--queries-per-run", type=int, default=2,
+        choices=range(1, len(CATALOG_QUERIES) + 1),
+    )
     parser.add_argument("--slot", type=int, default=date.today().toordinal())
     parser.add_argument("--sources", nargs="*", default=None)
     args = parser.parse_args()

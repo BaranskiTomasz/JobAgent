@@ -1,4 +1,5 @@
 from collector.query_matcher import job_matches_query, primary_query_token, query_matches, query_tokens
+from collector.taxonomy import classify_text
 
 
 def test_role_aliases_match():
@@ -63,3 +64,31 @@ def test_job_rejects_different_developer_specialty():
         "Salesforce Developer",
         "Uses JavaScript for custom integrations",
     )
+
+
+def test_framework_alias_discovers_technology_category():
+    assert job_matches_query(
+        "Python Developer",
+        "Senior Backend Engineer",
+        "Build APIs with Django and PostgreSQL",
+    )
+
+
+def test_broad_software_role_matches_without_technology_in_title():
+    assert job_matches_query("Software Developer", "Senior Software Engineer", "Distributed systems")
+
+
+def test_broad_software_role_includes_specialized_engineering_roles():
+    assert job_matches_query("Software Engineer", "Senior Backend Engineer", "Distributed systems")
+    assert job_matches_query("Software Engineer", "Frontend Developer", "Web application")
+
+
+def test_qa_aliases_share_one_role_family():
+    assert query_matches("QA Engineer", "Senior SDET")
+    assert query_matches("QA Engineer", "Test Automation Specialist")
+
+
+def test_taxonomy_classifies_new_technology_categories():
+    classification = classify_text("Backend Engineer", "Spring Boot, ASP.NET and Golang")
+    assert classification.technologies == {"java", "dotnet", "go"}
+    assert classification.role_families == {"backend", "software_engineering"}

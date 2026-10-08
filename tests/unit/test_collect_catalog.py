@@ -7,11 +7,16 @@ from scripts.collect_catalog import CATALOG_QUERIES, FACT_SCHEMA_VERSION, catalo
 
 def test_catalog_queries_rotate_without_exceeding_linkedin_budget():
     seen = set()
-    for slot in range(3):
+    for slot in range((len(CATALOG_QUERIES) + 1) // 2):
         queries = queries_for_slot(slot)
         assert len(queries) == 2
         seen.update(queries)
     assert seen == set(CATALOG_QUERIES)
+
+
+def test_catalog_queries_cover_technology_and_role_discovery():
+    assert {"Java Developer", ".NET Developer", "Go Developer"} <= set(CATALOG_QUERIES)
+    assert {"Software Developer", "Software Engineer", "Backend Developer", "Frontend Developer"} <= set(CATALOG_QUERIES)
 
 
 def test_catalog_query_rotation_wraps():

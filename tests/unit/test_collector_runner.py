@@ -488,6 +488,80 @@ class TestCollectJobCardsSearchQueryAttribution:
         assert mock_jobs.insert.call_args.kwargs["search_query"] == "Senior PHP Developer"
 
 
+class TestCollectJobCardsDiagnostics:
+    @patch("collector.runner.search_stats_repository")
+    @patch("collector.runner.job_repository")
+    @patch("collector.runner.make_source")
+    def test_records_complete_runner_funnel(self, mock_make_source, mock_jobs, mock_stats):
+        source = _mock_source()
+        rows = [
+            RawJob(title="Python Engineer", company="Acme", location="Remote",
+                   url="https://example.com/1", source="remotive", description="Python"),
+            RawJob(title="Python Engineer", company="Beta", location="Remote",
+                   url="https://example.com/2", source="remotive", description="Python"),
+        ]
+
+        def search(*args, **kwargs):
+            source.last_search_diagnostics = {
+                "upstream_found": 20, "query_matched": 12,
+                "date_matched": 8, "geo_matched": 5,
+            }
+            return rows
+
+        source.search.side_effect = search
+        mock_make_source.return_value = source
+        mock_jobs.insert.side_effect = ["job-1", None]
+
+        _collect_job_cards(
+            ["remotive"], ["Python"], ["Remote"], days_back=7,
+            max_jobs=None, known_urls=set(), rejected_kw=[], session_id=1,
+        )
+
+        payload = mock_stats.record.call_args.kwargs
+        assert payload["upstream_found"] == 20
+        assert payload["query_matched"] == 12
+        assert payload["date_matched"] == 8
+        assert payload["geo_matched"] == 5
+        assert payload["source_returned"] == 2
+        assert payload["known_url_filtered"] == 3
+        assert payload["global_matched"] == 2
+        assert payload["duplicate_found"] == 1
+        assert payload["inserted_found"] == 1
+        assert payload["source_status"] == "ok"
+
+    @patch("collector.runner.search_stats_repository")
+    @patch("collector.runner.job_repository")
+    @patch("collector.runner.make_source")
+    def test_records_source_error_before_skipping_source(self, mock_make_source, mock_jobs, mock_stats):
+        source = _mock_source()
+        source.search.side_effect = RuntimeError("upstream timed out")
+        mock_make_source.return_value = source
+
+        _collect_job_cards(
+            ["remotive"], ["Python"], ["Remote"], days_back=7,
+            max_jobs=None, known_urls=set(), rejected_kw=[], session_id=1,
+        )
+
+        payload = mock_stats.record.call_args.kwargs
+        assert payload["source_status"] == "error"
+        assert payload["source_error"] == "upstream timed out"
+
+    @patch("collector.runner.search_stats_repository")
+    @patch("collector.runner.job_repository")
+    @patch("collector.runner.make_source", side_effect=RuntimeError("source init failed"))
+    def test_records_source_error_when_source_cannot_start(self, mock_make_source, mock_jobs, mock_stats):
+        _collect_job_cards(
+            ["remotive"], ["Python"], ["Remote"], days_back=7,
+            max_jobs=None, known_urls=set(), rejected_kw=[], session_id=1,
+        )
+
+        args = mock_stats.record.call_args.args
+        payload = mock_stats.record.call_args.kwargs
+        assert args[2] == "__source__"
+        assert payload["source_status"] == "error"
+        assert payload["source_error"] == "source init failed"
+
+
 def _mock_run_deps(mock_criteria, mock_jobs, mock_collect, mock_lang, mock_kw):
     mock_criteria.get_active_dict.return_value = {
         "titles": ["PHP"], "locations": ["Poland"], "search_queries": [], "rejected": [],

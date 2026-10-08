@@ -82,7 +82,7 @@ Search-driven sources use source-specific query planning. LinkedIn searches the 
 
 ### Shared public catalog
 
-`python scripts/collect_catalog.py` fills JobAgentWeb's shared, logged-out catalog for PHP, Python, Node.js, React, Angular, and QA remote roles available from Poland or Bulgaria. It uses all registered sources except LinkedIn, which remains available only to personal runs because catalog-scale browser automation would put the user's account at risk. The script rotates two technology queries per run and extracts structured facts for the newly collected batch. Use `--queries-per-run`, `--max-jobs-per-source`, and `--sources` to adjust the budget; an explicit catalog request for LinkedIn is rejected.
+`python scripts/collect_catalog.py` fills JobAgentWeb's shared, logged-out catalog for technology categories such as PHP, Python, Node.js, React, Angular, QA, Java, .NET, and Go, plus broad role families such as Software Engineering, Backend, Frontend, Full Stack, Mobile, DevOps, Data, and ML/AI. It uses all registered sources except LinkedIn, which remains available only to personal runs because catalog-scale browser automation would put the user's account at risk. Collection uses a shared alias taxonomy and token-aware matcher, so broad queries can discover relevant specialist roles without requiring an exact title phrase. Use `--queries-per-run`, `--max-jobs-per-source`, and `--sources` to adjust the budget; an explicit catalog request for LinkedIn is rejected.
 
 Catalog collection reuses the same global `job_postings` records and cross-source aliases as personal runs. The authenticated JobAgentWeb catalog-import endpoint can attach a technology/country slice to an account by creating only its `user_job_states` rows; it does not recollect or copy the postings. Descriptions, extraction data, and duplicates stay shared; scores, ranking, and application decisions remain user-specific.
 
@@ -129,10 +129,10 @@ The personalized run may use LinkedIn and writes every discovered posting into t
 To populate only the public, non-personalized catalog, use the shorter collection-and-extraction path. LinkedIn is rejected in catalog mode:
 
 ```bash
-python scripts/collect_catalog.py --days 7 --queries-per-run 6
+python scripts/collect_catalog.py --days 7 --queries-per-run 18
 ```
 
-The default catalog run rotates two of the six categories and collects every matching posting in the selected date window, without a global or per-source job cap. `--queries-per-run 6` covers PHP, Python, Node.js, React, Angular, and QA in one run. Use `python scripts/extract_jobs.py --catalog --limit 200` to backfill unextracted shared descriptions from the last 14 days. `--max-jobs` and `--max-jobs-per-source` are optional safeguards intended for smoke tests, not normal catalog collection.
+The default catalog run rotates through the configured discovery queries and collects every matching posting in the selected date window, without a global or per-source job cap. `--queries-per-run` controls how many query plans are executed in one invocation; it is not a job limit. Use `python scripts/extract_jobs.py --catalog --limit 200` to backfill unextracted shared descriptions from the last 14 days. `--max-jobs` and `--max-jobs-per-source` are optional safeguards intended for smoke tests, not normal catalog collection.
 
 ### Prerequisites
 
@@ -420,7 +420,9 @@ Distillation is triggered as a pipeline step — not on every decision:
 
 Public catalog extraction uses a cost-saving first pass with a small schema containing only remote, hybrid, region, and PL/BG eligibility. Only postings that are explicitly non-remote, hybrid, or unavailable from both supported countries stop there; matching and uncertain postings continue to the complete extraction below. Gate-only facts carry `_extraction_tier=catalog_gate`, so the public queue does not repeatedly process a known ineligible posting. If that posting later enters a user's personal pool, JobAgentWeb deliberately places it back in the personal extraction queue and replaces the gate result with complete facts before scoring.
 
-Extraction reads the complete cleaned description retained for the source and writes schema version 3. Besides the compatibility fields consumed by the existing evaluator, it captures role family and specialization, seniority range, responsibilities, normalized skills with required/preferred/core semantics, multiple compensation bands, country eligibility and engagement modes, timezone/core hours, work authorization, EOR/visa signals, languages, company stage, team size, travel, office visits, and on-call duties.
+Extraction reads the complete cleaned description retained for the source and writes schema version 5. Besides the compatibility fields consumed by the existing evaluator, it captures role family and specialization, seniority range, responsibilities, normalized skills with required/preferred/core semantics, multiple compensation bands, country eligibility and engagement modes, timezone/core hours, work authorization, EOR/visa signals, languages, company stage, team size, travel, office visits, and on-call duties. Work mode is represented explicitly by `remote_available`, `hybrid_available`, and `office_presence_required`; a listing that merely mentions hybrid work is no longer rejected when it also allows fully remote work without mandatory office attendance.
+
+Each source run records a collection funnel from upstream candidates through query, date, geography, known-URL, shared matcher, duplicate, and insertion stages. It also records `ok`, `empty`, `partial`, or `error` status and the source error where applicable, making low recall distinguishable from a failed or exhausted source.
 
 Material values carry evidence and provenance. Source-native API values override text extraction, deterministic normalization maps aliases such as `Node.js` to `nodejs`, and derived PL/BG eligibility remains distinguishable from explicit source data. The extraction request treats posting text as untrusted content and ignores instructions embedded in it.
 

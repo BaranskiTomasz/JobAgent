@@ -1,5 +1,7 @@
 """Shared location-matching logic for API-based job sources."""
 
+import re
+
 
 def workplace_suffix(modes: set[str]) -> str:
     # An offer can legitimately advertise more than one mode; remote wins the
@@ -56,7 +58,10 @@ def location_matches(job_location: str, search_location: str) -> bool:
         return True
     if normalized_search in ("united states", "canada") and any(t in job_required_location for t in _NA_TOKENS):
         return True
-    if normalized_search in job_required_location:
+    def contains(value: str) -> bool:
+        return bool(re.search(rf"(?<![\w]){re.escape(value)}(?![\w])", job_required_location))
+
+    if contains(normalized_search):
         return True
     aliases = [k for k, v in _COUNTRY_ALIASES.items() if v == normalized_search]
-    return any(a in job_required_location for a in aliases)
+    return any(contains(alias) for alias in aliases)

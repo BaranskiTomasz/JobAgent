@@ -1,6 +1,8 @@
 import re
 import unicodedata
 
+from collector.taxonomy import classify_text
+
 
 _IGNORED = {
     "a", "an", "and", "of", "the", "for", "with", "remote",
@@ -39,6 +41,14 @@ def query_tokens(value: str) -> tuple[str, ...]:
 
 
 def query_matches(query: str, *texts: str | None) -> bool:
+    requested = classify_text(query)
+    available_categories = classify_text(*texts)
+    if requested.technologies and not requested.technologies.issubset(available_categories.technologies):
+        return False
+    if requested.role_families and not requested.role_families.issubset(available_categories.role_families):
+        return False
+    if requested.technologies or requested.role_families:
+        return True
     required = query_tokens(query)
     if not required:
         return False
@@ -47,6 +57,25 @@ def query_matches(query: str, *texts: str | None) -> bool:
 
 
 def job_matches_query(query: str, title: str, details: str | None = None) -> bool:
+    requested = classify_text(query)
+    title_categories = classify_text(title)
+    all_categories = classify_text(title, details)
+    if requested.role_families and not requested.role_families.issubset(title_categories.role_families):
+        return False
+    if requested.technologies and not requested.technologies.issubset(all_categories.technologies):
+        return False
+    if requested.technologies or requested.role_families:
+        disallowed_families = {"security", "management"}
+        if requested.technologies and title_categories.role_families & disallowed_families:
+            return False
+        customer_title = title.casefold()
+        if requested.technologies and any(value in customer_title for value in ("customer engineer", "support engineer", "solutions engineer")):
+            return False
+        if requested.technologies and not title_categories.technologies:
+            allowed_generic = {"software_engineering", "backend", "frontend", "fullstack", "qa", "mobile", "devops", "data", "ml"}
+            if not title_categories.role_families & allowed_generic:
+                return False
+        return True
     required = set(query_tokens(query))
     if not required:
         return False

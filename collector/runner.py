@@ -226,6 +226,7 @@ def _collect_job_cards(
             continue
 
         logger.info(f"\n[{source_id}] Starting source...")
+        source_error_recorded = False
         try:
             source = make_source(source_id, days_back=days_back)
 
@@ -300,15 +301,30 @@ def _collect_job_cards(
                         if query_budget:
                             remaining = min(query_budget - jobs_new_this_query, source_budget - jobs_new_this_source)
                         source.last_search_diagnostics = {}
-                        raw_jobs = source.search(query.outbound, location, max_results=remaining, known_urls=known_urls)
+                        try:
+                            raw_jobs = source.search(query.outbound, location, max_results=remaining, known_urls=known_urls)
+                        except Exception as exc:
+                            search_stats_repository.record(
+                                session_id, source_id, title, location, cards_found=0, new_found=0,
+                                source_status="error", source_error=str(exc)[:1000],
+                            )
+                            source_error_recorded = True
+                            raise
                         diagnostics = getattr(source, "last_search_diagnostics", {})
+                        source_returned = len(raw_jobs)
+                        known_url_filtered = None
+                        if "geo_matched" in diagnostics:
+                            known_url_filtered = max(diagnostics["geo_matched"] - source_returned, 0)
                         raw_jobs = [
                             raw for raw in raw_jobs
                             if job_matches_query(title, raw.title, raw.description)
                         ]
+                        global_matched = len(raw_jobs)
                         jobs_found += len(raw_jobs)
 
                         new_this_search = 0
+                        duplicate_this_search = 0
+                        insert_failed = False
                         for raw in raw_jobs:
                             if source_budget and jobs_new_this_source >= source_budget:
                                 break
@@ -332,9 +348,11 @@ def _collect_job_cards(
                                 # A single job's insert failing shouldn't take down
                                 # the whole run.
                                 logger.warning(f"  Skip (insert failed): {raw.title} @ {raw.company}, {e}")
+                                insert_failed = True
                                 continue
                             if job_id is None:
                                 logger.info(f"  Skip (duplicate): {raw.title} @ {raw.company}")
+                                duplicate_this_search += 1
                                 continue
 
                             jobs_new += 1
@@ -356,6 +374,12 @@ def _collect_job_cards(
                             if max_jobs is not None and jobs_new >= max_jobs:
                                 break
 
+                        diagnostic_status = diagnostics.get("source_status") or diagnostics.get("status")
+                        if diagnostic_status not in {"ok", "empty", "partial", "error"}:
+                            diagnostic_status = None
+                        source_status = diagnostic_status or ("empty" if diagnostics.get("empty_payload") else "ok")
+                        if diagnostics.get("partial") or insert_failed:
+                            source_status = "partial"
                         search_stats_repository.record(
                             session_id, source_id, title, location,
                             cards_found=len(raw_jobs), new_found=new_this_search,
@@ -363,12 +387,27 @@ def _collect_job_cards(
                             query_matched=diagnostics.get("query_matched", len(raw_jobs)),
                             date_matched=diagnostics.get("date_matched", len(raw_jobs)),
                             geo_matched=diagnostics.get("geo_matched", len(raw_jobs)),
+                            source_returned=source_returned,
+                            known_url_filtered=known_url_filtered,
+                            global_matched=global_matched,
+                            duplicate_found=duplicate_this_search,
+                            inserted_found=new_this_search,
+                            source_status=source_status,
+                            source_error=(diagnostics.get("source_error") or diagnostics.get("error")),
                         )
 
                         if source.requires_stealth_pauses:
                             pending_pause = _search_pause_seconds(new_this_search)
 
         except Exception as exc:
+            if not source_error_recorded:
+                try:
+                    search_stats_repository.record(
+                        session_id, source_id, "__source__", "", cards_found=0, new_found=0,
+                        source_status="error", source_error=str(exc)[:1000],
+                    )
+                except Exception as stats_exc:
+                    logger.warning(f"[{source_id}] Could not record source failure: {stats_exc}")
             logger.warning(f"[{source_id}] Source failed, skipping: {exc}")
 
     if jobs_prefiltered:

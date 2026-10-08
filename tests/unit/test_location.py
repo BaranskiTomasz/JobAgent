@@ -1,4 +1,4 @@
-from collector.location import workplace_suffix
+from collector.location import location_matches, workplace_suffix
 
 
 class TestWorkplaceSuffix:
@@ -19,3 +19,8 @@ class TestWorkplaceSuffix:
 
     def test_hybrid_wins_over_onsite_when_both_present(self):
         assert workplace_suffix({"hybrid", "onsite"}) == " (Hybrid)"
+
+
+def test_country_code_alias_matches_as_token_only():
+    assert location_matches("Remote, PL", "Poland")
+    assert not location_matches("Multiple locations", "Poland")

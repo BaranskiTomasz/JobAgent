@@ -236,7 +236,15 @@ def test_run_extraction_continues_after_one_malformed_job(mock_extract, mock_gat
 
 def test_catalog_gate_rejects_only_explicit_ineligibility():
     assert _catalog_gate_rejects({"remote": False}) is True
-    assert _catalog_gate_rejects({"remote": True, "hybrid": True}) is True
+    assert _catalog_gate_rejects({"remote": True, "hybrid": True}) is False
+    assert _catalog_gate_rejects({
+        "remote_available": True, "hybrid_available": True,
+        "office_presence_required": False,
+    }) is False
+    assert _catalog_gate_rejects({
+        "remote_available": True, "hybrid_available": True,
+        "office_presence_required": True,
+    }) is True
     assert _catalog_gate_rejects({"country_eligibility": [
         {"country_code": "PL", "eligible": False},
         {"country_code": "BG", "eligible": False},
@@ -329,6 +337,25 @@ def test_normalize_facts_keeps_unspecified_remote_country_unknown():
     assert [item["eligible"] for item in result["country_eligibility"]] == [None, None]
 
 
+def test_normalize_facts_preserves_legacy_and_new_work_mode_fields():
+    result = _normalize_facts({"remote": True, "hybrid": True})
+    assert result["remote_available"] is True
+    assert result["hybrid_available"] is True
+    assert result["office_presence_required"] is None
+
+
+def test_normalize_facts_prefers_new_work_mode_fields():
+    result = _normalize_facts({
+        "remote": False,
+        "hybrid": False,
+        "remote_available": True,
+        "hybrid_available": True,
+        "office_presence_required": False,
+    })
+    assert result["remote"] is True
+    assert result["hybrid"] is True
+
+
 def test_normalize_facts_expands_eu_region_and_does_not_store_it_as_country():
     result = _normalize_facts({
         "remote": True,
@@ -347,6 +374,14 @@ def test_source_data_overrides_matching_keys():
     assert result["salary_min"] == 15000
     assert result["salary_max"] == 20000
     assert result["remote"] is True
+
+
+def test_legacy_source_remote_overrides_extracted_remote_available():
+    data = {"remote": True, "remote_available": True}
+    job = {"source_structured_data": {"remote": False}}
+    result = _normalize_facts(_merge_source_structured_data(data, job))
+    assert result["remote"] is False
+    assert result["remote_available"] is False
 
 
 def test_source_data_as_dict_not_json_string_also_works():
