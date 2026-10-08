@@ -92,6 +92,8 @@ Arbeitnow Europe is fetched from its paginated public JSON API and filtered loca
 
 Arbeitnow UK uses the provider's separate UK feed and requires explicit Poland, Bulgaria, European, EMEA, or worldwide eligibility. UK-restricted and ambiguous bare-remote locations are not treated as evidence that the role can legally be performed from Poland or Bulgaria. The feed's visa-sponsorship flag is retained as source-native data.
 
+Ashby collection reads each configured public job board through the Posting API with compensation included, retains native remote regions and salary ranges, and reports board-level failures in collection diagnostics. Known URLs are compared canonically and postings without an API ID fall back to their canonical posting URL; coverage is limited to the maintained board registry.
+
 Hacker News collection discovers the newest monthly “Who is hiring?” story through Algolia, then reads the complete story item and its top-level comments. It selects the newest matching thread rather than trusting search-result order, preserves the comment ID/canonical HN URL, and rejects ambiguous remote or country-restricted listings unless the text explicitly supports the requested country (including Poland or Bulgaria).
 
 Greenhouse collection reads every configured company board through the official public Boards API with full job content. Boards are fetched concurrently, individual failures are reported as partial collection instead of being hidden, and canonical URLs are used for known-job filtering. Greenhouse has no global job index, so coverage is intentionally limited to the maintained company list in `collector/sources/ats_companies.json`; adding a company means adding its public board slug.

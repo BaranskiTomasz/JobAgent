@@ -140,7 +140,11 @@ def test_ashby_maps_public_board_response():
     result = source._fetch_board({"name": "Acme", "slug": "acme"})[0]
     assert result.source == "ashby"
     assert result.description == "Build APIs"
-    assert result.source_structured_data == {"remote": True, "remote_regions": ["Europe"]}
+    assert result.source_structured_data == {
+        "remote": True,
+        "remote_available": True,
+        "remote_regions": ["Europe"],
+    }
 
 
 def test_ats_search_filters_title_date_location_and_known_url():
