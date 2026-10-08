@@ -148,14 +148,36 @@ class TestHimalayasSourceSearch:
         posted = datetime.fromisoformat(results[0].posted_at)
         assert (datetime.now(timezone.utc) - posted).days == 3
 
-    def test_missing_pub_date_never_crashes_and_posted_at_is_none(self):
+    def test_missing_pub_date_is_excluded_from_a_bounded_search(self):
         src = _build_source([_item_xml(include_pub_date=False)])
         results = src.search("PHP", "Remote")
-        assert len(results) == 1
-        assert results[0].posted_at is None
+        assert results == []
 
     def test_http_error_returns_empty(self, mocker):
         mocker.patch("httpx.get", side_effect=Exception("connection error"))
         src = HimalayasSource()
         results = src.search("PHP", "Remote")
         assert results == []
+        assert src.last_search_diagnostics["source_status"] == "error"
+
+    def test_location_and_timezone_restrictions_are_applied_and_preserved(self):
+        item = _item_xml().replace(
+            "</himalayasJobs:companyName>",
+            "</himalayasJobs:companyName><himalayasJobs:locationRestriction>Poland</himalayasJobs:locationRestriction>"
+            "<himalayasJobs:timezoneRestriction>UTC+1</himalayasJobs:timezoneRestriction>",
+        )
+        src = _build_source([item])
+        result = src.search("PHP", "Poland")[0]
+        assert result.location == "Poland"
+        assert result.source_structured_data == {
+            "remote": True, "remote_available": True,
+            "remote_regions": ["Poland"], "timezone_requirement": "UTC+1",
+        }
+        assert src.search("PHP", "Bulgaria") == []
+
+    def test_expired_item_is_skipped(self):
+        item = _item_xml().replace(
+            "</himalayasJobs:companyName>",
+            "</himalayasJobs:companyName><himalayasJobs:expiryDate>2000-01-01T00:00:00Z</himalayasJobs:expiryDate>",
+        )
+        assert _build_source([item]).search("PHP", "Remote") == []
