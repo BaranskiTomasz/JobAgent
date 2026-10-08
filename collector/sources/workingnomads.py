@@ -5,9 +5,10 @@ import httpx
 
 from collector.base import JobSource, RawJob
 from collector.location import location_matches
+from collector.query_matcher import job_matches_query
 from collector.utils import strip_html
 
-_API_URL  = "https://www.workingnomads.com/api/exposed_jobs/?category=development"
+_API_URL  = "https://www.workingnomads.com/api/exposed_jobs/"
 _BASE_URL = "https://www.workingnomads.com"
 
 
@@ -51,16 +52,9 @@ class WorkingNomadsSource(JobSource):
     def _fetch_jobs(self) -> list[dict]:
         if self._jobs_cache is not None:
             return self._jobs_cache
-        try:
-            resp = self._client.get(_API_URL)
-        except Exception:
-            return []
-        if resp.status_code != 200:
-            return []
-        try:
-            data = resp.json()
-        except Exception:
-            return []
+        response = self._client.get(_API_URL)
+        response.raise_for_status()
+        data = response.json()
         self._jobs_cache = data if isinstance(data, list) else []
         return self._jobs_cache
 
@@ -74,14 +68,20 @@ class WorkingNomadsSource(JobSource):
     ) -> list[RawJob]:
         days    = days_back if days_back is not None else self._days_back
         cutoff  = datetime.now(timezone.utc) - timedelta(days=days)
-        keyword = title.lower()
-
         jobs = self._fetch_jobs()
 
         results: list[RawJob] = []
+        query_matched = 0
+        date_matched = 0
+        geo_matched = 0
+        known_url_filtered = 0
         for job in jobs:
-            if max_results and len(results) >= max_results:
-                break
+            job_title = job.get("title", "")
+            description = strip_html(job.get("description", ""))
+            tags = job.get("tags", "") or ""
+            if not job_matches_query(title, job_title, f"{tags}\n{description or ''}"):
+                continue
+            query_matched += 1
 
             pub_str = job.get("pub_date", "")
             try:
@@ -92,23 +92,24 @@ class WorkingNomadsSource(JobSource):
                     continue
             except (ValueError, AttributeError):
                 continue
+            date_matched += 1
 
             raw_url = job.get("url", "")
             if not raw_url:
                 continue
             url = _canonical_url(raw_url)
-            if known_urls and url in known_urls:
-                continue
-
-            job_title = job.get("title", "")
-            tags_raw = job.get("tags", "") or ""
-            tag_names = [t.strip().lower() for t in str(tags_raw).split(",") if t.strip()]
-            if keyword not in job_title.lower() and not any(keyword in t for t in tag_names):
-                continue
 
             job_location = job.get("location", "") or ""
             if not location_matches(job_location, location):
                 continue
+            geo_matched += 1
+            if known_urls and url in known_urls:
+                known_url_filtered += 1
+                continue
+            if max_results and len(results) >= max_results:
+                continue
+
+            source_id = url.rstrip("/").rsplit("/", 1)[-1]
 
             results.append(RawJob(
                 title=job_title,
@@ -116,9 +117,19 @@ class WorkingNomadsSource(JobSource):
                 location=job.get("location", "") or "Remote",
                 url=url,
                 source="workingnomads",
-                source_id=str(job.get("id", "")),
-                description=strip_html(job.get("description", "")),
+                source_id=source_id,
+                description=description,
                 posted_at=pub_dt.isoformat(),
+                source_structured_data={
+                    "remote": True,
+                    "remote_available": True,
+                    "remote_regions": [job_location] if job_location else [],
+                },
             ))
 
+        self.set_search_diagnostics(
+            upstream_found=len(jobs), query_matched=query_matched,
+            date_matched=date_matched, geo_matched=geo_matched,
+            known_url_filtered=known_url_filtered,
+        )
         return results

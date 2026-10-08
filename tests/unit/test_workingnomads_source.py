@@ -2,6 +2,9 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
+import httpx
+import pytest
+
 from collector.sources.workingnomads import WorkingNomadsSource, _canonical_url
 from collector.utils import strip_html as _strip_html
 
@@ -42,9 +45,9 @@ def _make_job(
     job_id: int = 1,
     title: str = "Senior PHP Developer",
     company_name: str = "Acme",
-    location: str = "Remote",
+    location: str = "Global",
     days_ago: int = 0,
-    tags: list[dict] | None = None,
+    tags: str | None = None,
     description: str = "<p>Great role</p>",
     url: str | None = None,
 ) -> dict:
@@ -56,7 +59,7 @@ def _make_job(
         "company_name": company_name,
         "location": location,
         "pub_date": pub,
-        "tags": tags if tags is not None else [{"name": "php"}, {"name": "backend"}],
+        "tags": tags if tags is not None else "php,backend",
         "description": description,
     }
 
@@ -78,7 +81,7 @@ class TestWorkingNomadsSearch:
     def test_source_id_is_job_id(self):
         src = _build_source([_make_job(job_id=42)])
         results = src.search("PHP", "Remote")
-        assert results[0].source_id == "42"
+        assert results[0].source_id == "php-42"
 
     def test_url_preserved(self):
         src = _build_source([_make_job(job_id=7)])
@@ -97,24 +100,34 @@ class TestWorkingNomadsSearch:
         src = _build_source([fresh, old], days_back=7)
         results = src.search("PHP", "Remote")
         assert len(results) == 1
-        assert results[0].source_id == "1"
+        assert results[0].source_id == "php-1"
 
     def test_filters_by_keyword_in_title(self):
-        php = _make_job(job_id=1, title="PHP Developer", tags=[])
-        py  = _make_job(job_id=2, title="Python Developer", tags=[])
+        php = _make_job(job_id=1, title="PHP Developer", tags="")
+        py  = _make_job(job_id=2, title="Python Developer", tags="")
         src = _build_source([php, py])
         results = src.search("PHP", "Remote")
         assert len(results) == 1
-        assert results[0].source_id == "1"
+        assert results[0].source_id == "php-1"
 
     def test_matches_keyword_in_tags(self):
-        job = _make_job(title="Backend Developer", tags=[{"name": "php"}, {"name": "laravel"}])
+        job = _make_job(title="Backend Developer", tags="php,laravel")
         src = _build_source([job])
         results = src.search("PHP", "Remote")
         assert len(results) == 1
 
+    def test_broad_query_matches_specialized_title(self):
+        job = _make_job(title="Senior Backend Engineer", tags="python,postgresql")
+        src = _build_source([job])
+        assert len(src.search("Software Engineer", "Remote")) == 1
+
+    def test_noisy_tags_do_not_change_unrelated_role(self):
+        job = _make_job(title="Senior Vue Developer", tags="vuejs,php,dotnet,nodejs")
+        src = _build_source([job])
+        assert src.search("PHP Developer", "Remote") == []
+
     def test_excludes_job_with_no_keyword_match(self):
-        job = _make_job(job_id=1, title="Python Developer", tags=[{"name": "python"}])
+        job = _make_job(job_id=1, title="Python Developer", tags="python")
         src = _build_source([job])
         results = src.search("PHP", "Remote")
         assert results == []
@@ -167,6 +180,40 @@ class TestWorkingNomadsSearch:
         results = src.search("PHP", "Remote")
         assert results[0].company == "GlobalTech"
 
+    def test_native_remote_facts_are_preserved(self):
+        result = _build_source([_make_job(location="Europe")]).search("PHP", "Poland")[0]
+        assert result.source_structured_data == {
+            "remote": True,
+            "remote_available": True,
+            "remote_regions": ["Europe"],
+        }
+
+    def test_records_search_funnel(self):
+        source = _build_source([
+            _make_job(job_id=1),
+            _make_job(job_id=2, days_ago=20),
+            _make_job(job_id=3, location="USA Only"),
+        ])
+        source.search("PHP", "Poland")
+        assert source.last_search_diagnostics == {
+            "upstream_found": 3,
+            "query_matched": 3,
+            "date_matched": 2,
+            "geo_matched": 1,
+            "known_url_filtered": 0,
+        }
+
+    def test_known_url_has_its_own_diagnostic(self):
+        job = _make_job(job_id=5)
+        source = _build_source([job])
+        source.search("PHP", "Remote", known_urls={job["url"]})
+        assert source.last_search_diagnostics["known_url_filtered"] == 1
+
+    def test_max_results_does_not_truncate_funnel(self):
+        source = _build_source([_make_job(job_id=index) for index in range(4)])
+        assert len(source.search("PHP", "Remote", max_results=1)) == 1
+        assert source.last_search_diagnostics["geo_matched"] == 4
+
     def test_location_worldwide_matches_any_country(self):
         src = _build_source([_make_job(location="Worldwide")])
         results = src.search("PHP", "Poland")
@@ -197,3 +244,30 @@ class TestWorkingNomadsSearch:
         assert results[0].posted_at is not None
         posted = datetime.fromisoformat(results[0].posted_at)
         assert (datetime.now(timezone.utc) - posted).days == 6
+
+
+class TestWorkingNomadsFetch:
+    def test_uses_canonical_unfiltered_feed_once(self):
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = []
+        source = WorkingNomadsSource()
+        source._client = MagicMock()
+        source._client.get.return_value = response
+
+        source.search("PHP", "Poland")
+        source.search("Java", "Bulgaria")
+
+        source._client.get.assert_called_once_with("https://www.workingnomads.com/api/exposed_jobs/")
+
+    def test_http_error_is_visible_to_runner(self):
+        response = MagicMock()
+        response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "unavailable", request=MagicMock(), response=MagicMock(),
+        )
+        source = WorkingNomadsSource()
+        source._client = MagicMock()
+        source._client.get.return_value = response
+
+        with pytest.raises(httpx.HTTPStatusError):
+            source.search("PHP", "Poland")

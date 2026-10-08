@@ -34,3 +34,8 @@ def test_eu_token_matches_supported_country():
 def test_explicit_country_exclusion_overrides_broad_region():
     assert not location_matches("Worldwide except Poland", "Poland")
     assert not location_matches("Europe excluding Bulgaria", "Bulgaria")
+
+
+def test_scoped_anywhere_is_not_worldwide():
+    assert not location_matches("Anywhere in India", "Poland")
+    assert location_matches("Anywhere", "Poland")

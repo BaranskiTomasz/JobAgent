@@ -48,6 +48,9 @@ def location_matches(job_location: str, search_location: str) -> bool:
     raw_search = search_location.lower().strip()
     normalized_search = _COUNTRY_ALIASES.get(raw_search, raw_search)
 
+    def contains(value: str) -> bool:
+        return bool(re.search(rf"(?<![\w]){re.escape(value)}(?![\w])", job_required_location))
+
     country_names = {normalized_search}
     country_names.update(alias for alias, country in _COUNTRY_ALIASES.items() if country == normalized_search)
     exclusions = ("except", "excluding", "excluded", "not available in", "outside")
@@ -60,7 +63,10 @@ def location_matches(job_location: str, search_location: str) -> bool:
 
     if normalized_search in _REMOTE_TERMS:
         return True
-    if not job_required_location or any(t in job_required_location for t in _WORLDWIDE_TOKENS):
+    scoped_anywhere = bool(re.search(r"\banywhere\s+in\b", job_required_location))
+    if not job_required_location or any(contains(token) for token in _WORLDWIDE_TOKENS if token != "anywhere"):
+        return True
+    if contains("anywhere") and not scoped_anywhere:
         return True
     if normalized_search in _EU_COUNTRIES and (
         any(t in job_required_location for t in _EUROPE_TOKENS)
@@ -71,9 +77,6 @@ def location_matches(job_location: str, search_location: str) -> bool:
         return True
     if normalized_search in ("united states", "canada") and any(t in job_required_location for t in _NA_TOKENS):
         return True
-    def contains(value: str) -> bool:
-        return bool(re.search(rf"(?<![\w]){re.escape(value)}(?![\w])", job_required_location))
-
     if contains(normalized_search):
         return True
     aliases = [k for k, v in _COUNTRY_ALIASES.items() if v == normalized_search]
