@@ -132,6 +132,24 @@ class TestNoFluffJobsSearch:
         assert results == []
         src.fetch_description.assert_not_called()
 
+    def test_known_url_is_canonical_and_remote_fact_is_retained(self):
+        src = _make_source()
+        posting = _posting(slug="remote-job", places=[{"city": "Remote"}])
+        posting.pop("id")
+        src._client.get.return_value = MagicMock(status_code=200, text=_search_html([posting]))
+        result = src.search("PHP", "Poland")[0]
+        assert result.source_id == "https://nofluffjobs.com/pl/job/remote-job"
+        assert result.source_structured_data["remote_available"] is True
+        assert result.source_structured_data["remote_regions"] == ["Poland"]
+        assert src.search("PHP", "Poland", known_urls={result.url + "/?utm=career"}) == []
+
+    def test_local_query_guard_drops_upstream_noise(self):
+        src = _make_source()
+        src._client.get.return_value = MagicMock(
+            status_code=200, text=_search_html([_posting(title="Java Developer")])
+        )
+        assert src.search("PHP", "Poland") == []
+
     def test_filters_by_date(self):
         src = _make_source()
         fresh = _posting(slug="fresh", days_ago=1)

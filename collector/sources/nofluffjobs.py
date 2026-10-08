@@ -18,12 +18,13 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 
 from collector.base import JobSource, RawJob
 from collector.location import workplace_suffix
+from collector.query_matcher import query_matches
 from collector.utils import strip_html
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,7 @@ class NoFluffJobsSource(JobSource):
     def __init__(self, days_back: int = 7, **_):
         self._days_back = days_back
         self._client: httpx.Client | None = None
+        self.last_search_diagnostics = {}
 
     @property
     def name(self) -> str:
@@ -112,6 +114,12 @@ class NoFluffJobsSource(JobSource):
         if self._client:
             self._client.close()
         self._client = None
+        self.last_search_diagnostics = {}
+
+    @staticmethod
+    def _url_key(url: str) -> str:
+        parsed = urlsplit((url or "").strip())
+        return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), "", ""))
 
     def fetch_description(self, url: str) -> str | None:
         try:
@@ -135,8 +143,10 @@ class NoFluffJobsSource(JobSource):
         known_urls: set[str] | None = None,
     ) -> list[RawJob]:
         if location.strip().lower() not in _POLAND_ALIASES:
+            self.set_search_diagnostics(source_status="skipped", reason="location_not_poland", upstream_found=0)
             return []
         if not title.strip():
+            self.set_search_diagnostics(source_status="skipped", reason="empty_query", upstream_found=0)
             return []
 
         days = days_back if days_back is not None else self._days_back
@@ -151,37 +161,68 @@ class NoFluffJobsSource(JobSource):
             resp = self._client.get(url)
         except Exception as e:
             logger.warning(f"NoFluffJobs search request failed: {e}")
+            self.set_search_diagnostics(source_status="error", source_error=str(e), upstream_found=0)
             return []
         if resp.status_code != 200:
+            self.set_search_diagnostics(source_status="error", source_error=f"HTTP {resp.status_code}", upstream_found=0)
             return []
 
         state = _parse_server_state(resp.text)
         if not state:
+            self.set_search_diagnostics(source_status="error", source_error="missing or blocked TransferState", upstream_found=0)
             return []
 
         postings = _find_postings(state)
-        # Only the first page of results is fetched, plenty for a daily incremental
-        # run; deeper pagination isn't implemented yet.
-
-        results: list[RawJob] = []
-        for posting in postings:
-            if max_results and len(results) >= max_results:
+        response_data = next((value.get("searchResponse") for value in state.values() if isinstance(value, dict) and isinstance(value.get("searchResponse"), dict)), {})
+        page_info = response_data.get("pagination") or response_data.get("page") or {}
+        total_pages = int(page_info.get("totalPages") or page_info.get("pages") or 1) if isinstance(page_info, dict) else 1
+        pagination_error = None
+        pages_fetched = 1
+        for next_page in range(2, max(1, total_pages) + 1):
+            try:
+                page_resp = self._client.get(f"{url}?page={next_page}")
+                if page_resp.status_code != 200:
+                    raise RuntimeError(f"HTTP {page_resp.status_code} on page {next_page}")
+                page_state = _parse_server_state(page_resp.text)
+                next_postings = _find_postings(page_state or {})
+                if not next_postings:
+                    break
+                postings.extend(next_postings)
+                pages_fetched = next_page
+            except Exception as exc:
+                pagination_error = str(exc)
                 break
 
+        results: list[RawJob] = []
+        known_keys = {self._url_key(url) for url in (known_urls or set())}
+        query_matched = date_matched = geo_matched = known_url_filtered = 0
+        detail_attempted = detail_failed = 0
+        seen_urls: set[str] = set()
+        for posting in postings:
             slug = posting.get("url")
             if not slug:
                 continue
+            technologies = posting.get("technology") or posting.get("technologies") or posting.get("tags") or []
+            if not query_matches(title, posting.get("title") or "", " ".join(str(tag) for tag in technologies)):
+                continue
+            query_matched += 1
 
             posted_ms = posting.get("posted")
             try:
                 posted_dt = datetime.fromtimestamp(posted_ms / 1000, tz=timezone.utc) if posted_ms else None
             except (TypeError, ValueError, OSError):
                 posted_dt = None
-            if posted_dt and posted_dt < cutoff:
+            if not posted_dt or posted_dt < cutoff:
                 continue
+            date_matched += 1
 
             job_url = _DETAIL_URL.format(slug=slug)
-            if known_urls and job_url in known_urls:
+            canonical_url = self._url_key(job_url)
+            if canonical_url in seen_urls:
+                continue
+            seen_urls.add(canonical_url)
+            if known_keys and canonical_url in known_keys:
+                known_url_filtered += 1
                 continue
 
             # "places" mixes a "Remote" pseudo-city with real cities and, for a
@@ -196,18 +237,39 @@ class NoFluffJobsSource(JobSource):
             modes = {"remote"} if "Remote" in cities else set()
             real_city = next((c for c in cities if c != "Remote"), None)
             location = f"{real_city}, Poland{workplace_suffix(modes)}" if real_city else f"Poland{workplace_suffix(modes)}"
+            geo_matched += 1
 
+            if max_results and len(results) >= max_results:
+                continue
+            detail_attempted += 1
             description = self.fetch_description(job_url)
+            if description is None:
+                detail_failed += 1
+            source_data = _extract_source_structured_data(posting, description)
+            if "remote" in modes:
+                source_data.update({
+                    "remote": True,
+                    "remote_available": True,
+                    "remote_regions": ["Poland"],
+                })
             results.append(RawJob(
                 title=posting.get("title", ""),
                 company=posting.get("name", ""),
                 location=location,
-                url=job_url,
+                url=canonical_url,
                 source=self.name,
-                source_id=posting.get("id"),
+                source_id=posting.get("id") or canonical_url,
                 description=description,
                 posted_at=posted_dt.isoformat() if posted_dt else None,
-                source_structured_data=_extract_source_structured_data(posting, description) or None,
+                source_structured_data=source_data or None,
             ))
-
+        self.set_search_diagnostics(
+            upstream_found=len(postings), query_matched=query_matched,
+            date_matched=date_matched, geo_matched=geo_matched,
+            known_url_filtered=known_url_filtered,
+            pages_fetched=pages_fetched,
+            source_status="partial" if pagination_error else "empty" if not postings else "ok",
+            source_error=pagination_error, detail_attempted=detail_attempted,
+            detail_failed=detail_failed,
+        )
         return results
