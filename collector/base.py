@@ -25,7 +25,7 @@ class RawJob:
 class JobSource(ABC):
     requires_stealth_pauses: bool = False
 
-    def set_search_diagnostics(self, **values: int) -> None:
+    def set_search_diagnostics(self, **values: object) -> None:
         self.last_search_diagnostics = values
 
     @property

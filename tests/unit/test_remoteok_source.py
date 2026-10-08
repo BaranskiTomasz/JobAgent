@@ -2,7 +2,10 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
-from collector.sources.remoteok import RemoteOKSource
+import httpx
+import pytest
+
+from collector.sources.remoteok import RemoteOKSource, _location_is_eligible, _tag_for_query
 from collector.location import location_matches as _location_matches
 from collector.utils import strip_html as _strip_html
 
@@ -125,6 +128,11 @@ class TestRemoteOKSourceSearch:
         assert len(results) == 1
         assert results[0].source_id == "1"
 
+    def test_broad_query_matches_specialized_title(self):
+        job = _make_job(position="Senior Backend Engineer")
+        src = _build_source([job])
+        assert len(src.search("Software Engineer", "Remote")) == 1
+
     def test_does_not_match_keyword_only_in_tags(self):
         # RemoteOK tags are too noisy (generic categories applied to all jobs),
         # so only title is used for keyword filtering.
@@ -194,6 +202,58 @@ class TestRemoteOKSourceSearch:
         results = src.search("PHP", "Remote")
         assert results[0].company == "GlobalTech"
 
+    def test_native_remote_facts_are_preserved(self):
+        src = _build_source([_make_job(location="Europe")])
+        result = src.search("PHP", "Poland")[0]
+        assert result.source_structured_data == {
+            "remote": True,
+            "remote_available": True,
+            "remote_regions": ["Europe"],
+            "_salary_disclosed": False,
+        }
+
+    def test_native_salary_is_normalized(self):
+        job = _make_job()
+        job.update(salary_min=80_000, salary_max=120_000)
+        result = _build_source([job]).search("PHP", "Remote")[0]
+        assert result.source_structured_data["salary_min"] == 80_000
+        assert result.source_structured_data["salary_max"] == 120_000
+        assert result.source_structured_data["salary_currency"] == "USD"
+        assert result.source_structured_data["salary_period"] == "yearly"
+
+    def test_records_search_funnel(self):
+        src = _build_source([
+            _make_job(slug="fresh"),
+            _make_job(slug="old", days_ago=20),
+            _make_job(slug="us", location="USA Only"),
+        ])
+        src.search("PHP", "Poland")
+        assert src.last_search_diagnostics == {
+            "upstream_found": 3,
+            "query_matched": 3,
+            "date_matched": 2,
+            "geo_matched": 1,
+            "known_url_filtered": 0,
+        }
+
+    def test_epoch_is_used_when_date_is_invalid(self):
+        job = _make_job()
+        job["date"] = "invalid"
+        job["epoch"] = int(datetime.now(timezone.utc).timestamp())
+        assert len(_build_source([job]).search("PHP", "Remote")) == 1
+
+    def test_max_results_does_not_truncate_funnel_diagnostics(self):
+        jobs = [_make_job(slug=f"job-{index}") for index in range(4)]
+        source = _build_source(jobs)
+        assert len(source.search("PHP", "Remote", max_results=1)) == 1
+        assert source.last_search_diagnostics["geo_matched"] == 4
+
+    def test_known_url_has_its_own_diagnostic(self):
+        job = _make_job(slug="known")
+        source = _build_source([job])
+        source.search("PHP", "Remote", known_urls={job["url"]})
+        assert source.last_search_diagnostics["known_url_filtered"] == 1
+
     def test_posted_at_captures_the_publication_date(self):
         # "date" was already parsed for the days_back cutoff, then discarded,
         # RawJob.posted_at carries it through instead.
@@ -226,7 +286,7 @@ class TestFetchJobsMergesGenericAndTag:
         tag_only_job = _make_job(slug="tag-only-hit", position="PHP Backend Engineer")
         src = self._source_with_urls()
         src._fetch_url = MagicMock(side_effect=lambda url: (
-            [generic_job] if url == "https://remoteok.io/api" else [tag_only_job]
+            [generic_job] if url == "https://remoteok.com/api" else [tag_only_job]
         ))
 
         jobs = src._fetch_jobs("php")
@@ -250,7 +310,7 @@ class TestFetchJobsMergesGenericAndTag:
 
         src._fetch_jobs("")
 
-        src._fetch_url.assert_called_once_with("https://remoteok.io/api")
+        src._fetch_url.assert_called_once_with("https://remoteok.com/api")
 
     def test_generic_feed_fetched_once_across_multiple_tags(self):
         src = self._source_with_urls()
@@ -259,7 +319,7 @@ class TestFetchJobsMergesGenericAndTag:
         src._fetch_jobs("php")
         src._fetch_jobs("python")
 
-        generic_calls = [c for c in src._fetch_url.call_args_list if c.args[0] == "https://remoteok.io/api"]
+        generic_calls = [c for c in src._fetch_url.call_args_list if c.args[0] == "https://remoteok.com/api"]
         assert len(generic_calls) == 1
 
     def test_same_tag_fetched_once_across_repeated_calls(self):
@@ -279,7 +339,7 @@ class TestFetchJobsMergesGenericAndTag:
         src._fetch_jobs("python")
 
         called_urls = [c.args[0] for c in src._fetch_url.call_args_list]
-        assert "https://remoteok.io/api?tags=python" in called_urls
+        assert "https://remoteok.com/api?tags=python" in called_urls
 
 
 class TestSearchDerivesTagFromFirstWord:
@@ -290,3 +350,53 @@ class TestSearchDerivesTagFromFirstWord:
         src.search("Symfony Developer", "Remote")
 
         src._fetch_jobs.assert_called_once_with("symfony")
+
+
+class TestRemoteOKQueryTags:
+    @pytest.mark.parametrize(("query", "tag"), [
+        ("Node.js Developer", "node"),
+        (".NET Developer", ".net"),
+        ("Go Developer", "golang"),
+        ("Software Engineer", "software"),
+        ("Full Stack Developer", "full-stack"),
+        ("Machine Learning Engineer", "machine-learning"),
+    ])
+    def test_maps_catalog_queries_to_remoteok_tags(self, query, tag):
+        assert _tag_for_query(query) == tag
+
+
+class TestRemoteOKDescriptionLocation:
+    def test_empty_location_with_country_restriction_is_not_worldwide(self):
+        description = "Mostly remote within Germany with a monthly Berlin office day."
+        assert not _location_is_eligible("", description, "Poland")
+
+    def test_empty_location_with_matching_country_is_eligible(self):
+        assert _location_is_eligible("", "We hire remote candidates in Poland.", "Poland")
+
+    def test_empty_location_without_restriction_remains_unknown(self):
+        assert _location_is_eligible("", "Join our distributed engineering team.", "Poland")
+
+
+class TestRemoteOKFetchFailures:
+    def test_generic_feed_error_is_visible_to_runner(self):
+        source = RemoteOKSource()
+        source._client = MagicMock()
+        response = MagicMock()
+        response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "unavailable", request=MagicMock(), response=MagicMock(),
+        )
+        source._client.get.return_value = response
+
+        with pytest.raises(httpx.HTTPStatusError):
+            source.search("Python Developer", "Poland")
+
+    def test_tag_feed_error_falls_back_to_generic_and_marks_partial(self):
+        source = RemoteOKSource()
+        source._generic_cache = [_make_job(position="Python Developer")]
+        source._fetch_url = MagicMock(side_effect=httpx.HTTPError("tag unavailable"))
+
+        results = source.search("Python Developer", "Poland")
+
+        assert len(results) == 1
+        assert source.last_search_diagnostics["source_status"] == "partial"
+        assert "tag unavailable" in source.last_search_diagnostics["source_error"]

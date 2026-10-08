@@ -80,6 +80,8 @@ International sources are filtered for remote roles that can be performed from t
 
 Remotive is downloaded once per collector run and filtered locally for every configured query and country. This stays within the provider's published request-frequency guidance while preserving broad-role recall; public listings retain the Remotive source attribution and application link required by its API terms.
 
+Remote OK combines its newest generic feed with canonical tag feeds selected through source-specific aliases such as `node`, `golang`, `full-stack`, and `machine-learning`. Tag failures degrade the search to the generic feed and are reported as partial instead of being mistaken for an empty source. Technology matching ignores noisy feed tags and uses the title and description; source-native remote and disclosed annual USD salary fields remain available to extraction.
+
 Search-driven sources use source-specific query planning. LinkedIn searches the candidate's work country plus compatible regional scopes such as Europe, EMEA, and Worldwide; preferred employer countries remain ranking signals because LinkedIn's location filter describes the job's geography, not the employer's headquarters. Tag-based boards receive normalized tags, and catalog-style sources use token-aware role aliases instead of exact title substrings. Query execution rotates using historical search statistics so later queries are not permanently starved by a job limit.
 
 ### Shared public catalog

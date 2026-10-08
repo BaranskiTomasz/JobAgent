@@ -312,8 +312,8 @@ def _collect_job_cards(
                             raise
                         diagnostics = getattr(source, "last_search_diagnostics", {})
                         source_returned = len(raw_jobs)
-                        known_url_filtered = None
-                        if "geo_matched" in diagnostics:
+                        known_url_filtered = diagnostics.get("known_url_filtered")
+                        if known_url_filtered is None and "geo_matched" in diagnostics:
                             known_url_filtered = max(diagnostics["geo_matched"] - source_returned, 0)
                         raw_jobs = [
                             raw for raw in raw_jobs
