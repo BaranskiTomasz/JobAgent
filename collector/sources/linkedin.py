@@ -1,7 +1,7 @@
 import time
 import random
 import os
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,6 +38,7 @@ class LinkedInSource(JobSource):
         self._playwright = None
         self._browser = None
         self._page = None
+        self.last_search_diagnostics = {}
 
     @property
     def name(self) -> str:
@@ -60,6 +61,17 @@ class LinkedInSource(JobSource):
             self._browser.close()
         if self._playwright:
             self._playwright.stop()
+        self._page = None
+        self._browser = None
+        self._playwright = None
+
+    @staticmethod
+    def _url_key(url: str) -> str:
+        parsed = urlsplit((url or "").strip())
+        host = parsed.netloc.lower()
+        if host == "www.linkedin.com":
+            host = "linkedin.com"
+        return urlunsplit((parsed.scheme.lower(), host, parsed.path.rstrip("/"), "", ""))
 
     def __enter__(self):
         self.start()
@@ -101,21 +113,43 @@ class LinkedInSource(JobSource):
 
     def search(self, title: str, location: str, days_back: int | None = None, max_results: int | None = None, known_urls: set[str] | None = None) -> list[RawJob]:
         days = days_back if days_back is not None else self._days_back
+        days = max(1, int(days))
         seconds = days * 24 * 3600
+        if not title.strip() or not location.strip():
+            self.set_search_diagnostics(source_status="skipped", reason="empty_query_or_location")
+            return []
         url = (
             f"{_SEARCH_URL}"
-            f"?keywords={quote(title)}"
-            f"&location={quote(location)}"
+            f"?keywords={quote(title.strip())}"
+            f"&location={quote(location.strip(), safe='')}"
             f"&f_WT=2"
             f"&f_TPR=r{seconds}"
             f"&sortBy=DD"
         )
-        self._goto(url)
+        try:
+            self._goto(url)
+        except Exception as exc:
+            self.set_search_diagnostics(source_status="error", source_error=str(exc), upstream_found=0)
+            return []
         self._wait()
-        cards = self._collect_cards(max_jobs=max_results, known_urls=known_urls)
-        matching = [card for card in cards if query_matches(title, card.title)]
+        try:
+            cards = self._collect_cards(max_jobs=max_results, known_urls=known_urls)
+        except Exception as exc:
+            self.set_search_diagnostics(source_status="error", source_error=str(exc), upstream_found=0)
+            return []
+        known_keys = {self._url_key(url) for url in (known_urls or set())}
+        matching = [card for card in cards if self._url_key(card.url) not in known_keys and query_matches(title, card.title)]
         for card in matching:
-            card.source_structured_data = {"remote": True, "remote_regions": [location]}
+            card.source_structured_data = {
+                "remote": True,
+                "remote_available": True,
+                "remote_regions": [location.strip()],
+            }
+        self.set_search_diagnostics(
+            source_status="empty" if not cards else "ok",
+            upstream_found=len(cards), query_matched=len(matching),
+            date_matched=len(matching), geo_matched=len(matching),
+        )
         return matching
 
     def fetch_description(self, url: str) -> str | None:
@@ -123,6 +157,8 @@ class LinkedInSource(JobSource):
         try:
             self._page.goto(url, wait_until="domcontentloaded", timeout=30_000)
         except PlaywrightTimeout:
+            return None
+        except Exception:
             return None
         try:
             self._page.wait_for_load_state("networkidle", timeout=8_000)
@@ -239,8 +275,10 @@ class LinkedInSource(JobSource):
 
     def _collect_cards(self, max_jobs: int | None = None, known_urls: set[str] | None = None) -> list[RawJob]:
         results: list[RawJob] = []
+        seen_urls: set[str] = set()
+        known_keys = {self._url_key(url) for url in (known_urls or set())}
         page_num = 0
-        new_total = 0  # estimated-new cards (not in known_urls) for max_jobs cap
+        new_total = 0
 
         while True:
             try:
@@ -283,17 +321,29 @@ class LinkedInSource(JobSource):
                 }
             """)
 
+            new_on_page = 0
             for card in cards:
+                url = card.get("url", "")
+                parsed = urlsplit(url)
+                if parsed.netloc.lower() not in {"linkedin.com", "www.linkedin.com"} or not parsed.path.startswith("/jobs/view/"):
+                    continue
+                url_key = self._url_key(url)
+                if url_key in seen_urls:
+                    continue
+                seen_urls.add(url_key)
+                if url_key in known_keys:
+                    continue
                 results.append(RawJob(
-                    title=card["title"],
-                    company=card["company"],
-                    location=card["location"],
-                    url=card["url"],
+                    title=card.get("title", ""),
+                    company=card.get("company", ""),
+                    location=card.get("location", ""),
+                    url=url_key,
                     source=self.name,
+                    source_id=url_key,
                 ))
+                new_on_page += 1
 
             page_num += 1
-            new_on_page = sum(1 for c in cards if c["url"] not in known_urls) if known_urls is not None else len(cards)
             new_total += new_on_page
             print(f"  Page {page_num}: {len(cards)} cards ({new_on_page} new, total: {len(results)})")
 
