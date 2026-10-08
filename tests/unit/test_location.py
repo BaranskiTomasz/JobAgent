@@ -24,3 +24,13 @@ class TestWorkplaceSuffix:
 def test_country_code_alias_matches_as_token_only():
     assert location_matches("Remote, PL", "Poland")
     assert not location_matches("Multiple locations", "Poland")
+
+
+def test_eu_token_matches_supported_country():
+    assert location_matches("EU", "Poland")
+    assert location_matches("EU only", "Bulgaria")
+
+
+def test_explicit_country_exclusion_overrides_broad_region():
+    assert not location_matches("Worldwide except Poland", "Poland")
+    assert not location_matches("Europe excluding Bulgaria", "Bulgaria")

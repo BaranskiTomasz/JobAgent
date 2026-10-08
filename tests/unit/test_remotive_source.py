@@ -2,6 +2,9 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
+import httpx
+import pytest
+
 from collector.sources.remotive import RemotiveSource
 from collector.location import location_matches as _location_matches
 from collector.utils import strip_html as _strip_html
@@ -188,10 +191,43 @@ class TestRemotiveSourceSearch:
         results = src.search("PHP Developer", "Remote")
         assert results[0].company == "GlobalTech"
 
-    def test_fetch_jobs_called_with_title(self):
+    def test_fetch_jobs_uses_shared_feed(self):
         src = _build_source([])
         src.search("React Developer", "Remote")
-        src._fetch_jobs.assert_called_once_with("React Developer")
+        src._fetch_jobs.assert_called_once_with()
+
+    def test_broad_query_matches_specialized_title(self):
+        src = _build_source([_make_job(title="Senior Backend Engineer")])
+        assert len(src.search("Software Engineer", "Remote")) == 1
+
+    def test_native_remote_facts_are_preserved(self):
+        src = _build_source([_make_job(candidate_location="Europe")])
+        result = src.search("PHP Developer", "Poland")[0]
+        assert result.source_structured_data == {
+            "remote": True,
+            "remote_available": True,
+            "remote_regions": ["Europe"],
+        }
+
+    def test_noisy_tags_do_not_create_a_technology_match(self):
+        job = _make_job(title="Senior Data Scientist", description="Build forecasting models")
+        job["tags"] = ["PHP", "Java", "React"]
+        src = _build_source([job])
+        assert src.search("PHP Developer", "Remote") == []
+
+    def test_records_search_funnel(self):
+        src = _build_source([
+            _make_job(job_id=1),
+            _make_job(job_id=2, days_ago=20),
+            _make_job(job_id=3, candidate_location="USA Only"),
+        ])
+        src.search("PHP Developer", "Poland")
+        assert src.last_search_diagnostics == {
+            "upstream_found": 3,
+            "query_matched": 3,
+            "date_matched": 2,
+            "geo_matched": 1,
+        }
 
     def test_posted_at_captures_the_publication_date(self):
         # publication_date was already parsed for the days_back cutoff, then
@@ -201,3 +237,30 @@ class TestRemotiveSourceSearch:
         assert results[0].posted_at is not None
         posted = datetime.fromisoformat(results[0].posted_at)
         assert (datetime.now(timezone.utc) - posted).days == 2
+
+
+class TestRemotiveFetch:
+    def test_feed_is_downloaded_once_for_multiple_queries(self):
+        response = MagicMock()
+        response.json.return_value = {"jobs": []}
+        response.raise_for_status.return_value = None
+        source = RemotiveSource()
+        source._client = MagicMock()
+        source._client.get.return_value = response
+
+        source.search("Python Developer", "Poland")
+        source.search("Java Developer", "Poland")
+
+        source._client.get.assert_called_once_with("https://remotive.com/api/remote-jobs")
+
+    def test_http_errors_are_visible_to_the_runner(self):
+        source = RemotiveSource()
+        source._client = MagicMock()
+        response = MagicMock()
+        response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "rate limited", request=MagicMock(), response=MagicMock(),
+        )
+        source._client.get.return_value = response
+
+        with pytest.raises(httpx.HTTPStatusError):
+            source.search("Python Developer", "Poland")

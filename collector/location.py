@@ -21,7 +21,7 @@ _EU_COUNTRIES = frozenset({
 })
 
 _WORLDWIDE_TOKENS = frozenset({"worldwide", "anywhere", "global", "international"})
-_EUROPE_TOKENS    = frozenset({"europe", "european", "emea", "eea", "eu "})
+_EUROPE_TOKENS    = frozenset({"europe", "european", "emea", "eea"})
 _NA_TOKENS        = frozenset({"north america", "usa/canada", "canada/usa", "americas"})
 
 _COUNTRY_ALIASES: dict[str, str] = {
@@ -48,11 +48,24 @@ def location_matches(job_location: str, search_location: str) -> bool:
     raw_search = search_location.lower().strip()
     normalized_search = _COUNTRY_ALIASES.get(raw_search, raw_search)
 
+    country_names = {normalized_search}
+    country_names.update(alias for alias, country in _COUNTRY_ALIASES.items() if country == normalized_search)
+    exclusions = ("except", "excluding", "excluded", "not available in", "outside")
+    if any(
+        re.search(rf"\b{re.escape(marker)}\s+(?:of\s+)?{re.escape(country)}\b", job_required_location)
+        for marker in exclusions
+        for country in country_names
+    ):
+        return False
+
     if normalized_search in _REMOTE_TERMS:
         return True
     if not job_required_location or any(t in job_required_location for t in _WORLDWIDE_TOKENS):
         return True
-    if normalized_search in _EU_COUNTRIES and any(t in job_required_location for t in _EUROPE_TOKENS):
+    if normalized_search in _EU_COUNTRIES and (
+        any(t in job_required_location for t in _EUROPE_TOKENS)
+        or bool(re.search(r"(?<![a-z])eu(?![a-z])", job_required_location))
+    ):
         return True
     if normalized_search in _EU_COUNTRIES and any(t in job_required_location for t in _EU_TIMEZONE_TOKENS):
         return True

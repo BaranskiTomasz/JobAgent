@@ -5,6 +5,7 @@ import httpx
 
 from collector.base import JobSource, RawJob
 from collector.location import location_matches
+from collector.query_matcher import job_matches_query
 from collector.utils import strip_html
 
 _API_URL = "https://remotive.com/api/remote-jobs"
@@ -14,7 +15,7 @@ class RemotiveSource(JobSource):
     def __init__(self, days_back: int = 7, **_):
         self._days_back = days_back
         self._client: httpx.Client | None = None
-        self._jobs_cache: dict[str, list[dict]] = {}
+        self._jobs_cache: list[dict] | None = None
 
     @property
     def name(self) -> str:
@@ -26,39 +27,27 @@ class RemotiveSource(JobSource):
             timeout=30,
             follow_redirects=True,
         )
-        self._jobs_cache = {}
+        self._jobs_cache = None
         return self
 
     def __exit__(self, *args):
         if self._client:
             self._client.close()
         self._client = None
-        self._jobs_cache = {}
+        self._jobs_cache = None
 
     def login(self) -> None:
         pass
 
-    def _fetch_jobs(self, title: str) -> list[dict]:
-        if title in self._jobs_cache:
-            return self._jobs_cache[title]
-        try:
-            resp = self._client.get(_API_URL, params={"search": title, "limit": 0})
-        except Exception:
-            return []
-        if resp.status_code != 200:
-            return []
-        jobs = resp.json().get("jobs", [])
-        # Remotive searches full descriptions, keep only jobs where the keyword
-        # appears in the title or tags, not just buried in the description.
-        if title:
-            keyword = title.lower()
-            jobs = [
-                j for j in jobs
-                if keyword in j.get("title", "").lower()
-                or any(keyword in t.lower() for t in j.get("tags", []))
-            ]
-        self._jobs_cache[title] = jobs
-        return self._jobs_cache[title]
+    def _fetch_jobs(self) -> list[dict]:
+        if self._jobs_cache is not None:
+            return self._jobs_cache
+        response = self._client.get(_API_URL)
+        response.raise_for_status()
+        payload = response.json()
+        jobs = payload.get("jobs", []) if isinstance(payload, dict) else []
+        self._jobs_cache = jobs if isinstance(jobs, list) else []
+        return self._jobs_cache
 
     def search(
         self,
@@ -71,12 +60,19 @@ class RemotiveSource(JobSource):
         days   = days_back if days_back is not None else self._days_back
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-        jobs = self._fetch_jobs(title)
+        jobs = self._fetch_jobs()
 
         results: list[RawJob] = []
+        query_matched = 0
+        date_matched = 0
+        geo_matched = 0
         for job in jobs:
             if max_results and len(results) >= max_results:
                 break
+            description = strip_html(job.get("description", ""))
+            if not job_matches_query(title, job.get("title", ""), description):
+                continue
+            query_matched += 1
 
             # Date filter
             pub_str = job.get("publication_date", "")
@@ -88,15 +84,17 @@ class RemotiveSource(JobSource):
                     continue
             except (ValueError, AttributeError):
                 continue
+            date_matched += 1
 
             url = job.get("url", "")
             if not url:
                 continue
-            if known_urls and url in known_urls:
-                continue
 
             candidate_loc = job.get("candidate_required_location", "")
             if not location_matches(candidate_loc, location):
+                continue
+            geo_matched += 1
+            if known_urls and url in known_urls:
                 continue
 
             results.append(RawJob(
@@ -106,8 +104,17 @@ class RemotiveSource(JobSource):
                 url=url,
                 source="remotive",
                 source_id=str(job.get("id", "")),
-                description=strip_html(job.get("description", "")),
+                description=description,
                 posted_at=pub_dt.isoformat(),
+                source_structured_data={
+                    "remote": True,
+                    "remote_available": True,
+                    "remote_regions": [candidate_loc] if candidate_loc else [],
+                },
             ))
 
+        self.set_search_diagnostics(
+            upstream_found=len(jobs), query_matched=query_matched,
+            date_matched=date_matched, geo_matched=geo_matched,
+        )
         return results
