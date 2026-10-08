@@ -39,6 +39,66 @@ def test_greenhouse_maps_public_board_response():
     assert result.source == "greenhouse"
     assert result.source_id == "acme:42"
     assert result.description == "Build APIs"
+    assert result.source_structured_data == {
+        "remote": True,
+        "remote_available": True,
+        "remote_regions": ["Remote - Europe"],
+    }
+
+
+def test_greenhouse_falls_back_to_canonical_url_without_board_job_id():
+    source = GreenhouseSource()
+    source._client = MagicMock()
+    url = "https://boards.greenhouse.io/acme/jobs/no-id"
+    source._client.get.return_value = _response({"jobs": [{
+        "title": "Python Engineer",
+        "company_name": "Acme",
+        "location": {"name": "Remote - Europe"},
+        "absolute_url": url,
+        "first_published": datetime.now(timezone.utc).isoformat(),
+        "content": "Build APIs",
+    }]})
+    result = source._fetch_board({"name": "Acme", "slug": "acme"})[0]
+    assert result.source_id == url
+
+
+def test_greenhouse_reports_failed_boards_and_filters_canonical_known_urls():
+    source = GreenhouseSource()
+    source._boards = [{"name": "Acme", "slug": "acme"}, {"name": "Broken", "slug": "broken"}]
+    source._client = MagicMock()
+    url = "https://boards.greenhouse.io/acme/jobs/42/"
+    response = _response({"jobs": [{
+        "id": 42,
+        "title": "Python Engineer",
+        "company_name": "Acme",
+        "location": {"name": "Remote - Europe"},
+        "absolute_url": url,
+        "first_published": datetime.now(timezone.utc).isoformat(),
+        "content": "Remote Europe",
+    }]})
+    source._client.get.side_effect = [response, RuntimeError("upstream unavailable")]
+    assert source.search("Python", "Poland", known_urls={url.rstrip("/")}) == []
+    assert source.last_search_diagnostics["boards_failed"] == 1
+    assert source.last_search_diagnostics["source_status"] == "partial"
+    assert "broken" in source.last_search_diagnostics["source_error"]
+
+
+def test_greenhouse_does_not_promote_description_only_remote_to_source_fact():
+    source = GreenhouseSource()
+    source._client = MagicMock()
+    source._client.get.return_value = _response({"jobs": [{
+        "id": 42,
+        "title": "Python Engineer",
+        "company_name": "Acme",
+        "location": {"name": "Berlin"},
+        "absolute_url": "https://boards.greenhouse.io/acme/jobs/42",
+        "first_published": datetime.now(timezone.utc).isoformat(),
+        "content": "Work from home may be available.",
+    }]})
+
+    result = source._fetch_board({"name": "Acme", "slug": "acme"})[0]
+
+    assert result.source_structured_data is None
 
 
 def test_lever_maps_public_board_response():
