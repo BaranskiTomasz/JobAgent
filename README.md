@@ -84,6 +84,8 @@ Remote OK combines its newest generic feed with canonical tag feeds selected thr
 
 Working Nomads is fetched once from its exposed feed and filtered locally. The feed currently has no pagination and its category parameter is ignored, so JobAgent treats it as a limited upstream window rather than a complete archive. Stable posting IDs are derived from Working Nomads URLs, while query, date, geography, known-URL, and returned counts remain visible in collection diagnostics.
 
+We Work Remotely merges the official All Programming, Full-Stack, Back-End, Front-End, and DevOps/Sysadmin RSS feeds by posting URL. RSS publication dates enforce the requested collection window even when promoted listings appear out of order. A failed category feed is reported as a partial source result, and public listings preserve the WWR attribution and direct link required by the RSS terms.
+
 Search-driven sources use source-specific query planning. LinkedIn searches the candidate's work country plus compatible regional scopes such as Europe, EMEA, and Worldwide; preferred employer countries remain ranking signals because LinkedIn's location filter describes the job's geography, not the employer's headquarters. Tag-based boards receive normalized tags, and catalog-style sources use token-aware role aliases instead of exact title substrings. Query execution rotates using historical search statistics so later queries are not permanently starved by a job limit.
 
 ### Shared public catalog

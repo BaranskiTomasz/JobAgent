@@ -4,6 +4,9 @@ from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from unittest.mock import MagicMock
 
+import httpx
+import pytest
+
 from collector.sources.weworkremotely import WWRSource, _region_matches
 
 
@@ -108,16 +111,12 @@ class TestWWRSourceSearch:
         results = src.search("PHP Developer", "Remote", known_urls=known)
         assert results == []
 
-    def test_old_pub_date_is_not_filtered_out(self):
-        # Regression: this feed's own pubDate is unreliable (verified live,
-        # 2026-08-30), so a days_back cutoff against it silently rejected every
-        # single item, every run. The feed only ever returns its ~25 latest
-        # postings anyway, so no date filter is applied here.
+    def test_old_pub_date_is_filtered_out(self):
         fresh = _item_xml(link="https://weworkremotely.com/remote-jobs/fresh", days_ago=1)
         old   = _item_xml(link="https://weworkremotely.com/remote-jobs/old", days_ago=30)
         src = _build_source([fresh, old], days_back=7)
         results = src.search("Developer", "Remote")
-        assert len(results) == 2
+        assert [result.source_id for result in results] == ["fresh"]
 
     def test_respects_max_results(self):
         items = [_item_xml(link=f"https://weworkremotely.com/remote-jobs/{i}") for i in range(5)]
@@ -135,11 +134,62 @@ class TestWWRSourceSearch:
         results = src.search("Developer", "Remote")
         assert results == []
 
-    def test_posted_at_is_always_none(self):
-        # This feed's pubDate can't be trusted (verified live, 2026-08-30 - the
-        # newest RSS item claimed an 18-day-old publish date while the site's own
-        # HTML page showed a "Today" posting), so it's never surfaced as posted_at
-        # rather than risk feeding the ranker a wrong age.
+    def test_posted_at_uses_rss_publication_date(self):
         src = _build_source([_item_xml(days_ago=3)])
         results = src.search("PHP Developer", "Remote")
-        assert results[0].posted_at is None
+        assert results[0].posted_at is not None
+        assert (datetime.now(timezone.utc) - datetime.fromisoformat(results[0].posted_at)).days == 3
+
+    def test_broad_query_matches_specialized_title(self):
+        src = _build_source([_item_xml(title="Acme: Senior Backend Engineer")])
+        assert len(src.search("Software Engineer", "Remote")) == 1
+
+    def test_native_remote_facts_are_preserved(self):
+        src = _build_source([_item_xml(region="Europe Only")])
+        result = src.search("PHP Developer", "Poland")[0]
+        assert result.source_structured_data == {
+            "remote": True,
+            "remote_available": True,
+            "remote_regions": ["Europe Only"],
+        }
+
+    def test_records_search_funnel(self):
+        src = _build_source([
+            _item_xml(link="https://weworkremotely.com/remote-jobs/fresh"),
+            _item_xml(link="https://weworkremotely.com/remote-jobs/old", days_ago=30),
+            _item_xml(link="https://weworkremotely.com/remote-jobs/us", region="USA Only"),
+        ])
+        src.search("PHP Developer", "Poland")
+        assert src.last_search_diagnostics == {
+            "upstream_found": 3,
+            "query_matched": 3,
+            "date_matched": 2,
+            "geo_matched": 1,
+            "known_url_filtered": 0,
+        }
+
+
+class TestWWRFeeds:
+    def test_category_feeds_are_merged_and_deduplicated(self):
+        item = ET.fromstring(_item_xml())
+        source = WWRSource()
+        source._fetch_feed = MagicMock(return_value=[item])
+
+        assert len(source._fetch_items()) == 1
+        assert source._fetch_feed.call_count == len(source._FEED_URLS)
+
+    def test_single_feed_failure_marks_result_partial(self):
+        item = ET.fromstring(_item_xml())
+        source = WWRSource()
+        source._fetch_feed = MagicMock(side_effect=[httpx.HTTPError("feed failed"), *([[item]] * 4)])
+
+        assert len(source.search("PHP Developer", "Poland")) == 1
+        assert source.last_search_diagnostics["source_status"] == "partial"
+        assert "feed failed" in source.last_search_diagnostics["source_error"]
+
+    def test_all_feed_failures_are_visible_to_runner(self):
+        source = WWRSource()
+        source._fetch_feed = MagicMock(side_effect=httpx.HTTPError("all feeds failed"))
+
+        with pytest.raises(RuntimeError, match="all feeds failed"):
+            source.search("PHP Developer", "Poland")

@@ -2,6 +2,7 @@
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 from collector.sources.weworkremotely import (
@@ -53,7 +54,9 @@ def _mock_response(text: str, status_code: int = 200):
     resp.text = text
     resp.status_code = status_code
     if status_code >= 400:
-        resp.raise_for_status.side_effect = Exception(f"HTTP {status_code}")
+        resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            f"HTTP {status_code}", request=MagicMock(), response=resp,
+        )
     else:
         resp.raise_for_status.return_value = None
     return resp
@@ -138,12 +141,7 @@ class TestWWRSourceSearch:
         jobs = WWRSource().search("PHP", "Remote")
         assert jobs == []
 
-    def test_old_pub_date_is_not_filtered_out(self, mocker):
-        # Regression: this feed's own pubDate is unreliable (verified live,
-        # 2026-08-30 - the newest RSS item claimed an 18-day-old publish date while
-        # the site's own HTML page showed a "Today" posting), so a days_back cutoff
-        # against it silently rejected every single item, every run. The feed only
-        # ever returns its ~25 latest postings anyway, so no date filter is applied.
+    def test_old_pub_date_is_filtered_out(self, mocker):
         old_date = (datetime.now(tz=timezone.utc) - timedelta(days=60)).strftime(
             "%a, %d %b %Y %H:%M:%S +0000"
         )
@@ -151,16 +149,14 @@ class TestWWRSourceSearch:
         mocker.patch("httpx.get", return_value=_mock_response(feed))
 
         jobs = WWRSource().search("PHP", "Remote", days_back=30)
-        assert len(jobs) == 1
+        assert jobs == []
 
-    def test_posted_at_is_always_none(self, mocker):
-        # This feed's pubDate can't be trusted (see test above), so posted_at is
-        # never populated from it rather than risk feeding the ranker a wrong age.
+    def test_posted_at_uses_rss_date(self, mocker):
         feed = _make_feed([{"title": "AcmeCo: PHP Dev"}])
         mocker.patch("httpx.get", return_value=_mock_response(feed))
 
         jobs = WWRSource().search("PHP", "Remote")
-        assert jobs[0].posted_at is None
+        assert jobs[0].posted_at is not None
 
     def test_skips_known_urls(self, mocker):
         url = "https://weworkremotely.com/remote-jobs/acmeco-php-developer"
@@ -205,11 +201,11 @@ class TestWWRSourceSearch:
         jobs = WWRSource().search("PHP", "Remote")
         assert jobs == []
 
-    def test_http_error_returns_empty(self, mocker):
+    def test_http_error_is_visible_to_runner(self, mocker):
         mocker.patch("httpx.get", side_effect=Exception("connection error"))
 
-        jobs = WWRSource().search("PHP", "Remote")
-        assert jobs == []
+        with pytest.raises(Exception, match="connection error"):
+            WWRSource().search("PHP", "Remote")
 
     def test_source_id_is_slug(self, mocker):
         url = "https://weworkremotely.com/remote-jobs/acmeco-php-developer"
@@ -226,11 +222,11 @@ class TestWWRSourceSearch:
         jobs = WWRSource().search("PHP", "Poland")
         assert len(jobs) == 1
 
-    def test_http_error_status_returns_empty(self, mocker):
+    def test_http_error_status_is_visible_to_runner(self, mocker):
         mocker.patch("httpx.get", return_value=_mock_response("", status_code=503))
 
-        jobs = WWRSource().search("PHP", "Remote")
-        assert jobs == []
+        with pytest.raises(RuntimeError, match="HTTP 503"):
+            WWRSource().search("PHP", "Remote")
 
     def test_source_name_is_weworkremotely(self, mocker):
         feed = _make_feed([{"title": "AcmeCo: PHP Dev"}])

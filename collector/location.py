@@ -63,7 +63,8 @@ def location_matches(job_location: str, search_location: str) -> bool:
 
     if normalized_search in _REMOTE_TERMS:
         return True
-    scoped_anywhere = bool(re.search(r"\banywhere\s+in\b", job_required_location))
+    anywhere_in_world = bool(re.search(r"\banywhere\s+in\s+(?:the\s+)?world\b", job_required_location))
+    scoped_anywhere = bool(re.search(r"\banywhere\s+in\b", job_required_location)) and not anywhere_in_world
     if not job_required_location or any(contains(token) for token in _WORLDWIDE_TOKENS if token != "anywhere"):
         return True
     if contains("anywhere") and not scoped_anywhere:
