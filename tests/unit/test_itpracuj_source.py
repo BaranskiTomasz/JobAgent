@@ -3,7 +3,16 @@ import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
-from collector.sources.itpracuj import ItPracujSource, _read_next_data, _find_query
+from collector.sources.itpracuj import (
+    ItPracujSource,
+    _read_next_data,
+    _find_query,
+    _parse_salary,
+    _parse_seniority,
+    _extract_source_structured_data,
+    _extract_detail_structured_data,
+    _detail_text,
+)
 
 
 def _next_data_page(payload: dict) -> MagicMock:
@@ -29,6 +38,9 @@ def _group(
     days_ago=0,
     description="Krótki opis stanowiska...",
     work_modes=None,
+    salary_display="",
+    position_levels=None,
+    technologies=None,
 ):
     published = (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {
@@ -38,6 +50,9 @@ def _group(
         "groupId": f"group-{partition_id}",
         "jobDescription": description,
         "workModes": work_modes if work_modes is not None else ["Praca zdalna"],
+        "salaryDisplayText": salary_display,
+        "positionLevels": position_levels if position_levels is not None else [],
+        "technologies": technologies if technologies is not None else [],
         "offers": [{"offerAbsoluteUri": offer_url, "displayWorkplace": city, "partitionId": partition_id}],
     }
 
@@ -71,6 +86,93 @@ class TestFindQuery:
         assert _find_query(data, "jobOffers") is None
 
 
+class TestParsingHelpers:
+    def test_parse_salary_hourly(self):
+        res = _parse_salary("130–170\xa0zł netto (+\xa0VAT)\xa0/ godz.")
+        assert res == {
+            "salary_min": 130,
+            "salary_max": 170,
+            "_salary_disclosed": True,
+            "salary_currency": "PLN",
+            "salary_period": "hourly",
+        }
+
+    def test_parse_salary_monthly_single_val(self):
+        res = _parse_salary("15 000 zł / mies.")
+        assert res == {
+            "salary_min": 15000,
+            "salary_max": 15000,
+            "_salary_disclosed": True,
+            "salary_currency": "PLN",
+            "salary_period": "monthly",
+        }
+
+    def test_parse_salary_empty_or_invalid(self):
+        assert _parse_salary("") == {}
+        assert _parse_salary("Wynagrodzenie do uzgodnienia") == {}
+        assert _parse_salary("1000 - 2000 JPY / mth") == {}
+
+    def test_parse_seniority_levels(self):
+        assert _parse_seniority(["Starszy specjalista / Starsza specjalistka (senior)"]) == "senior"
+        assert _parse_seniority(["Młodszy specjalista / Młodsza specjalistka (junior)"]) == "junior"
+        assert _parse_seniority(["Specjalista / Specjalistka (mid / Regular)"]) == "mid"
+        assert _parse_seniority(["Kierownik / Kierowniczka - koordynator / Koordynatorka"]) == "lead"
+        assert _parse_seniority(["Dyrektor / Dyrektorka"]) == "director"
+        assert _parse_seniority(["Praktykant / Stażysta"]) is None
+        assert _parse_seniority([]) is None
+
+    def test_extract_source_structured_data_technologies_as_strings(self):
+        group = {
+            "positionLevels": ["senior"],
+            "salaryDisplayText": "20 000–25 000 zł / mies.",
+            "technologies": ["Python", {"name": "Django"}, {"unknown": "x"}, "PostgreSQL"],
+        }
+        res = _extract_source_structured_data(group)
+        assert res["seniority"] == "senior"
+        assert res["salary_min"] == 20000
+        assert res["salary_max"] == 25000
+        assert res["salary_currency"] == "PLN"
+        assert res["salary_period"] == "monthly"
+        assert res["_salary_disclosed"] is True
+        # Dicts and strings are all reduced to plain hashable strings
+        assert res["stack_required"] == ["Python", "Django", "PostgreSQL"]
+
+    def test_extract_detail_structured_data(self):
+        offer = {
+            "sections": [
+                {
+                    "sectionType": "technologies",
+                    "subSections": [
+                        {
+                            "sectionType": "technologies-expected",
+                            "model": {"customItems": [{"name": "Python"}, {"name": "Docker"}]},
+                        },
+                        {
+                            "sectionType": "technologies-optional",
+                            "model": {"customItems": [{"name": "Kubernetes"}]},
+                        },
+                    ],
+                }
+            ]
+        }
+        res = _extract_detail_structured_data(offer)
+        assert res == {
+            "stack_required": ["Python", "Docker"],
+            "stack_preferred": ["Kubernetes"],
+        }
+
+    def test_detail_text_joins_text_sections_ignoring_gallery(self):
+        offer = {
+            "textSections": [
+                {"sectionType": "responsibilities", "plainText": "Responsibilities: code"},
+                {"sectionType": "about-us-gallery", "plainText": "Should be ignored"},
+                {"sectionType": "requirements", "plainText": "Requirements: Python"},
+            ]
+        }
+        text = _detail_text(offer)
+        assert text == "Responsibilities: code\n\nRequirements: Python"
+
+
 def _make_source() -> ItPracujSource:
     src = ItPracujSource()
     src._page = MagicMock()
@@ -100,10 +202,6 @@ class TestItPracujSourceSearch:
         assert "Symfony%20Developer" in called_url
 
     def test_search_url_does_not_restrict_to_remote_workmode(self):
-        # Regression: it.pracuj.pl is routed for hybrid/onsite Polish-city
-        # candidates too (collector/runner.py's _POLAND_ONLY_SOURCES), so a
-        # hardcoded "praca zdalna;wm,home-office" URL segment silently
-        # returned nothing relevant for them.
         src = _make_source()
         src._page.eval_on_selector.return_value = json.dumps(_search_payload([_group()]))
         src.search("PHP", "Poland")
@@ -133,9 +231,6 @@ class TestItPracujSourceSearch:
         assert results[0].location == "Gdansk, Poland"
 
     def test_description_taken_from_search_payload(self):
-        # No second (detail-page) fetch is made, a cross-subdomain navigation in the
-        # same session triggered a live Cloudflare CAPTCHA once, so this uses the
-        # truncated preview already present in the search results instead.
         src = _make_source()
         src._page.eval_on_selector.return_value = json.dumps(_search_payload([_group(description="Opis stanowiska...")]))
         results = src.search("PHP", "Poland")
@@ -169,7 +264,31 @@ class TestItPracujSourceSearch:
         }
         assert src.search("PHP", "Poland", known_urls={"https://www.pracuj.pl/praca/remote,oferta,1/"}) == []
 
-    def test_follows_numbered_pages_from_total_count(self):
+    def test_structured_data_extracted_in_search(self):
+        src = _make_source()
+        group = _group(
+            job_title="Python Developer",
+            salary_display="120–150 zł netto (+ VAT) / godz.",
+            position_levels=["Starszy specjalista / Starsza specjalistka (senior)"],
+            technologies=["Python", "PostgreSQL"],
+            work_modes=["Praca zdalna"],
+        )
+        src._page.eval_on_selector.return_value = json.dumps(_search_payload([group]))
+        results = src.search("Python", "Poland")
+        assert len(results) == 1
+        data = results[0].source_structured_data
+        assert data["remote"] is True
+        assert data["remote_available"] is True
+        assert data["remote_regions"] == ["Poland"]
+        assert data["seniority"] == "senior"
+        assert data["salary_min"] == 120
+        assert data["salary_max"] == 150
+        assert data["salary_currency"] == "PLN"
+        assert data["salary_period"] == "hourly"
+        assert data["_salary_disclosed"] is True
+        assert data["stack_required"] == ["Python", "PostgreSQL"]
+
+    def test_follows_numbered_pages_with_pn_parameter(self):
         src = _make_source()
         first = _search_payload([_group(offer_url="https://www.pracuj.pl/praca/a,oferta,1", partition_id=1)])
         first["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["offersTotalCount"] = 2
@@ -178,6 +297,8 @@ class TestItPracujSourceSearch:
         results = src.search("PHP", "Poland")
         assert len(results) == 2
         assert src.last_search_diagnostics["pages_fetched"] == 2
+        # Verify pn=2 is used for pagination, not page=2
+        src._page.goto.assert_called_with("https://it.pracuj.pl/praca/PHP;kw?pn=2", wait_until="domcontentloaded", timeout=20000)
 
     def test_filters_by_date(self):
         src = _make_source()
@@ -217,11 +338,52 @@ class TestItPracujSourceSearch:
         assert results == []
 
     def test_posted_at_captures_last_publicated(self):
-        # lastPublicated was already parsed for the days_back cutoff, then
-        # discarded, RawJob.posted_at carries it through instead.
         src = _make_source()
         src._page.eval_on_selector.return_value = json.dumps(_search_payload([_group(days_ago=1)]))
         results = src.search("PHP Developer", "Poland")
         assert results[0].posted_at is not None
         posted = datetime.fromisoformat(results[0].posted_at)
         assert (datetime.now(timezone.utc) - posted).days == 1
+
+
+class TestItPracujSourceFetchDescription:
+    def test_fetch_description_success(self):
+        src = _make_source()
+        payload = {
+            "props": {
+                "pageProps": {
+                    "dehydratedState": {
+                        "queries": [
+                            {
+                                "queryKey": ["jobOffer", "1005101176", "pl"],
+                                "state": {
+                                    "data": {
+                                        "textSections": [
+                                            {"sectionType": "responsibilities", "plainText": "Responsibilities: code"},
+                                            {"sectionType": "about-us-gallery", "plainText": "Ignore gallery"},
+                                            {"sectionType": "requirements", "plainText": "Requirements: Python"},
+                                        ]
+                                    }
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        src._page.eval_on_selector.return_value = json.dumps(payload)
+        desc = src.fetch_description("https://www.pracuj.pl/praca/python-dev,oferta,1005101176")
+        assert desc == "Responsibilities: code\n\nRequirements: Python"
+
+    def test_fetch_description_returns_none_on_missing_data(self):
+        src = _make_source()
+        src._page.eval_on_selector.return_value = json.dumps({"props": {"pageProps": {}}})
+        desc = src.fetch_description("https://www.pracuj.pl/praca/python-dev,oferta,1005101176")
+        assert desc is None
+
+    def test_fetch_description_returns_none_on_timeout(self):
+        src = _make_source()
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout
+        src._page.goto.side_effect = PlaywrightTimeout("timeout")
+        desc = src.fetch_description("https://www.pracuj.pl/praca/python-dev,oferta,1005101176")
+        assert desc is None
