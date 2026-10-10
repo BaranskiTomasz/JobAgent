@@ -267,10 +267,29 @@ class TestExtractSourceStructuredData:
         assert data["salary_min"] == 15000
         assert data["salary_max"] == 25000
         assert data["salary_currency"] == "PLN"
-        assert data["stack_required"] == [{"name": "PHP"}]
+        assert data["stack_required"] == ["PHP"]
+        assert data["stack_preferred"] == ["Docker"]
 
     def test_skips_unknown_salary_or_seniority_values(self):
         assert _extract_source_structured_data({
             "experienceLevel": "c-level",
             "employmentTypes": [{"from": 1, "to": 2, "currency": "CHF", "unit": "sprint"}],
         }) == {"_salary_disclosed": False}
+
+    def test_skill_dicts_are_reduced_to_plain_name_strings(self):
+        # Regression: requiredSkills/niceToHaveSkills are lists of
+        # {"skillId", "name", "level", "group"} dicts (verified live), not
+        # plain strings. Passing the raw dicts through made every catalog
+        # extraction crash in extractor/runner.py's dict.fromkeys() dedup
+        # ("unhashable type: 'dict'") - caught on a real live run against
+        # production (0/247 jobs extracted that run).
+        data = _extract_source_structured_data({
+            "requiredSkills": [
+                {"skillId": "x", "name": "Python", "level": 4, "group": None},
+                {"skillId": "y", "name": None, "level": 1, "group": None},
+            ],
+            "niceToHaveSkills": [],
+        })
+        assert data["stack_required"] == ["Python"]
+        assert "stack_preferred" not in data
+        assert all(isinstance(name, str) for name in data["stack_required"])

@@ -58,13 +58,31 @@ def _extract_source_structured_data(offer: dict) -> dict:
             data["salary_currency"] = currency
             data["salary_period"] = period
 
-    required = offer.get("requiredSkills") or []
+    # requiredSkills/niceToHaveSkills are lists of {"skillId", "name",
+    # "level", "group"} dicts (verified live), not plain strings - the
+    # extraction schema's stack_required/stack_preferred are
+    # {"type": "array", "items": {"type": "string"}}. Passing the raw dicts
+    # through made every catalog extraction raise "unhashable type: 'dict'"
+    # in extractor/runner.py's dict.fromkeys() dedup, caught on a real live
+    # run against production (0/247 jobs extracted that run).
+    required = [_skill_name(skill) for skill in (offer.get("requiredSkills") or [])]
+    required = [name for name in required if name]
     if required:
         data["stack_required"] = required
-    preferred = offer.get("niceToHaveSkills") or []
+    preferred = [_skill_name(skill) for skill in (offer.get("niceToHaveSkills") or [])]
+    preferred = [name for name in preferred if name]
     if preferred:
         data["stack_preferred"] = preferred
     return data
+
+
+def _skill_name(skill) -> str | None:
+    if isinstance(skill, dict):
+        name = skill.get("name")
+        return str(name) if name else None
+    if skill:
+        return str(skill)
+    return None
 
 
 class JustJoinSource(JobSource):
