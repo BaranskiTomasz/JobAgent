@@ -6,6 +6,7 @@ load_dotenv()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 CLAUDE_MODEL = "claude-sonnet-4-6"          # CV parsing, legacy scorer
 CLAUDE_EXTRACT_MODEL  = "claude-haiku-4-5-20251001"
+CLAUDE_CATALOG_EXTRACT_MODEL = os.getenv("CLAUDE_CATALOG_EXTRACT_MODEL", "claude-haiku-5-5")
 CLAUDE_RANK_MODEL     = "claude-opus-4-8"
 CLAUDE_DISTILL_MODEL  = "claude-opus-4-8"
 
@@ -65,6 +66,7 @@ MODEL_COSTS: dict[str, tuple[float, float]] = {
     "claude-opus-4-8":            (5.00,  25.00),   # was (15, 75), Opus 4.8 launched at a lower rate
     "claude-sonnet-4-6":          (3.00,  15.00),
     "claude-haiku-4-5-20251001":  (1.00,   5.00),   # was (0.25, 1.25), undercounted actual Haiku 4.5 rate
+    "claude-haiku-5-5":            (0.10,   0.50),
     "voyage-3-large":             (0.18,   0.00),   # was 0.06, per 1M embed tokens
     "rerank-2":                   (0.05,   0.00),   # per 1M tokens (rerank billing is now token-based, not per-query)
 }

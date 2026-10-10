@@ -60,6 +60,26 @@ def job_matches_query(query: str, title: str, details: str | None = None) -> boo
     requested = classify_text(query)
     title_categories = classify_text(title)
     all_categories = classify_text(title, details)
+    requested_specializations = requested.role_families - {"software_engineering"}
+    if requested_specializations == {"qa"} and re.search(
+        r"\b(?:rater|rating|annotator|annotation|search evaluator|content reviewer)\b",
+        title.casefold(),
+    ):
+        return False
+    if requested_specializations == {"mobile"} and not re.search(
+        r"\b(?:developer|engineer|architect|programmer)\b",
+        title.casefold(),
+    ):
+        return False
+    if not requested_specializations:
+        non_software_specializations = {
+            "devops", "data", "ml", "security", "qa", "management",
+        }
+        if title_categories.role_families & non_software_specializations and not re.search(
+            r"\b(?:software|developer|backend|back-end|frontend|front-end|full[ -]?stack)\b",
+            title.casefold(),
+        ):
+            return False
     if requested.role_families and not requested.role_families.issubset(title_categories.role_families):
         return False
     if requested.technologies and not requested.technologies.issubset(all_categories.technologies):
@@ -92,6 +112,27 @@ def job_matches_query(query: str, title: str, details: str | None = None) -> boo
         return False
     available = title_tokens | set(query_tokens(details or ""))
     return required.issubset(available)
+
+
+def job_matches_query_with_focused_description(
+    query: str, title: str, details: str | None = None,
+) -> bool:
+    if not job_matches_query(query, title, details):
+        return False
+
+    requested = classify_text(query)
+    title_categories = classify_text(title)
+    details_categories = classify_text(details)
+    title_specializations = title_categories.role_families - {"software_engineering"}
+    allowed_title_specializations = {"backend", "frontend", "fullstack"}
+    return not (
+        requested.technologies
+        and not requested.technologies & title_categories.technologies
+        and (
+            len(details_categories.technologies) >= 3
+            or bool(title_specializations - allowed_title_specializations)
+        )
+    )
 
 
 def primary_query_token(query: str) -> str:

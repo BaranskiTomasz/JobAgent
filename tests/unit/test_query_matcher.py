@@ -1,4 +1,10 @@
-from collector.query_matcher import job_matches_query, primary_query_token, query_matches, query_tokens
+from collector.query_matcher import (
+    job_matches_query,
+    job_matches_query_with_focused_description,
+    primary_query_token,
+    query_matches,
+    query_tokens,
+)
 from collector.taxonomy import classify_text
 
 
@@ -86,6 +92,40 @@ def test_broad_software_role_includes_specialized_engineering_roles():
 def test_qa_aliases_share_one_role_family():
     assert query_matches("QA Engineer", "Senior SDET")
     assert query_matches("QA Engineer", "Test Automation Specialist")
+
+
+def test_qa_rejects_content_or_search_rating_roles():
+    assert not job_matches_query(
+        "QA Engineer",
+        "Quality Assurance Rater - Spanish",
+        "Evaluate search results for quality and relevance",
+    )
+
+
+def test_mobile_rejects_marketing_and_design_roles():
+    assert not job_matches_query(
+        "Mobile Developer",
+        "User Acquisition & Performance Marketing Manager – Mobile Apps",
+    )
+    assert not job_matches_query(
+        "Mobile Developer",
+        "Senior Product Designer - Mobile",
+    )
+
+
+def test_focused_technology_fallback_rejects_other_specializations():
+    assert not job_matches_query_with_focused_description(
+        ".NET Developer",
+        "DevOps Engineer (Azure)",
+        "Automate a focused .NET deployment platform.",
+    )
+
+
+def test_broad_software_query_rejects_specialist_non_software_titles():
+    assert not job_matches_query("Software Developer", "Senior DevOps Engineer")
+    assert not job_matches_query("Software Engineer", "Senior Data Engineer")
+    assert not job_matches_query("Software Engineer", "Engineering Manager, Platform")
+    assert job_matches_query("Software Engineer", "Software Engineer, Data Platform")
 
 
 def test_taxonomy_classifies_new_technology_categories():

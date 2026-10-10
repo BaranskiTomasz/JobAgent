@@ -1,16 +1,19 @@
 from datetime import datetime, timedelta, timezone
 from html import unescape
 import re
+import time
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
 from collector.base import JobSource, RawJob
 from collector.location import location_matches
-from collector.query_matcher import job_matches_query
+from collector.query_matcher import job_matches_query_with_focused_description
 from collector.utils import strip_html
 
 _MAX_PAGES = 50
+_MAX_RATE_LIMIT_RETRIES = 1
+_MAX_RETRY_AFTER_SECONDS = 30.0
 _BROAD_REMOTE_REGION = re.compile(
     r"\b(worldwide|global|anywhere|europe|european|emea|eu|poland|polska|bulgaria)\b",
     re.IGNORECASE,
@@ -49,8 +52,9 @@ class ArbeitnowSource(JobSource):
     source_name = "arbeitnow"
     api_url = "https://www.arbeitnow.com/api/job-board-api"
 
-    def __init__(self, days_back: int = 7, **_):
+    def __init__(self, days_back: int = 7, sleep=time.sleep, **_):
         self._days_back = days_back
+        self._sleep = sleep
         self._client: httpx.Client | None = None
         self._jobs_cache: list[dict] | None = None
         self._fetch_diagnostics: dict[str, object] = {}
@@ -81,15 +85,23 @@ class ArbeitnowSource(JobSource):
             return self._jobs_cache
         if self._client is None:
             raise RuntimeError("Arbeitnow source must be used as a context manager")
-        cutoff = datetime.now(timezone.utc) - timedelta(days=self._days_back)
         jobs: list[dict] = []
         seen_keys: set[str] = set()
         pages = 0
         complete = True
         for page in range(1, _MAX_PAGES + 1):
             try:
-                response = self._client.get(self.api_url, params={"page": page})
-                response.raise_for_status()
+                for attempt in range(_MAX_RATE_LIMIT_RETRIES + 1):
+                    response = self._client.get(self.api_url, params={"page": page})
+                    if response.status_code != 429 or attempt == _MAX_RATE_LIMIT_RETRIES:
+                        response.raise_for_status()
+                        break
+                    retry_after = response.headers.get("Retry-After", "1")
+                    try:
+                        delay = float(retry_after)
+                    except (TypeError, ValueError):
+                        delay = 1.0
+                    self._sleep(min(max(delay, 0.0), _MAX_RETRY_AFTER_SECONDS))
                 data = response.json()
             except (httpx.HTTPError, ValueError, TypeError) as exc:
                 self._fetch_diagnostics = {
@@ -110,10 +122,6 @@ class ArbeitnowSource(JobSource):
                 if key not in seen_keys:
                     seen_keys.add(key)
                     jobs.append(item)
-            dates = [_published_at(item.get("created_at")) for item in batch if isinstance(item, dict)]
-            dates = [value for value in dates if value is not None]
-            if dates and min(dates) < cutoff:
-                break
             if not (data.get("links") or {}).get("next"):
                 break
         else:
@@ -122,6 +130,7 @@ class ArbeitnowSource(JobSource):
             **self._fetch_diagnostics,
             "api_pages": pages,
             "api_complete": complete,
+            "api_page_limit_reached": pages == _MAX_PAGES,
         }
         self._jobs_cache = jobs
         return jobs
@@ -156,7 +165,9 @@ class ArbeitnowSource(JobSource):
             )
             if not _is_remote(job) or (
                 keyword
-                and not job_matches_query(keyword, job_title, details + "\n" + description)
+                and not job_matches_query_with_focused_description(
+                    keyword, job_title, details + "\n" + description,
+                )
             ):
                 continue
             query_matched += 1

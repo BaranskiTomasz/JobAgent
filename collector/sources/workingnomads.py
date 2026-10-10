@@ -5,7 +5,7 @@ import httpx
 
 from collector.base import JobSource, RawJob
 from collector.location import location_matches
-from collector.query_matcher import job_matches_query
+from collector.query_matcher import job_matches_query_with_focused_description
 from collector.utils import strip_html
 
 _API_URL  = "https://www.workingnomads.com/api/exposed_jobs/"
@@ -79,7 +79,9 @@ class WorkingNomadsSource(JobSource):
             job_title = job.get("title", "")
             description = strip_html(job.get("description", ""))
             tags = job.get("tags", "") or ""
-            if not job_matches_query(title, job_title, f"{tags}\n{description or ''}"):
+            if not job_matches_query_with_focused_description(
+                title, job_title, f"{tags}\n{description or ''}",
+            ):
                 continue
             query_matched += 1
 

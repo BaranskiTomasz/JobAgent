@@ -86,3 +86,58 @@ def test_filters_missing_dates_and_duplicate_urls_and_normalizes_known_url():
     missing_date = _job("missing")
     missing_date.pop("published_at")
     assert [job.source_id for job in _source([first, duplicate, missing_date]).search("Python", "Poland", known_urls={first["url"] + "/"})] == []
+
+
+def test_rejects_country_restriction_in_remote_title_for_poland():
+    job = _job(title="AI Security Engineer (Remote in the U.S.)")
+    job["locations"] = ["Remote"]
+    assert _source([job]).search("AI Security Engineer", "Poland") == []
+
+
+def test_reads_job_location_payload_field_for_geo_filtering():
+    job = _job(title="AI Engineer @ Draftline India")
+    job.pop("locations")
+    job["job_location"] = "India"
+    assert _source([job]).search("AI Engineer", "Poland") == []
+
+
+def test_applies_the_same_geo_restriction_for_bulgaria():
+    job = _job(title="AI Security Engineer (Remote in the U.S.)")
+    job["locations"] = ["Remote"]
+    assert _source([job]).search("AI Security Engineer", "Bulgaria") == []
+
+
+def test_rejects_dash_separated_us_only_restriction():
+    job = _job(title="Senior Software Engineer - Javascript (Remote- US only)")
+    job["locations"] = ["Remote"]
+    assert _source([job]).search("Software Developer", "Poland") == []
+
+
+def test_software_query_does_not_admit_pure_security_role():
+    job = _job(title="Security Engineer")
+    job["description"] = "Protect the platform from threats."
+    assert _source([job]).search("Software Developer", "Poland") == []
+
+
+def test_software_security_role_remains_searchable():
+    job = _job(title="Software Security Engineer")
+    job["description"] = "Build secure software for our customers."
+    assert len(_source([job]).search("Software Developer", "Poland")) == 1
+
+
+def test_software_query_rejects_application_security_role():
+    job = _job(title="Application Security Engineer")
+    job["description"] = "Review applications for security vulnerabilities."
+    assert _source([job]).search("Software Developer", "Poland") == []
+
+
+def test_mobile_query_rejects_marketing_and_design_roles():
+    marketing = _job(title="User Acquisition Manager - Mobile Apps")
+    designer = _job(job_id="designer", title="Senior Product Designer - Mobile")
+    assert _source([marketing, designer]).search("Mobile Developer", "Poland") == []
+
+
+def test_dotnet_query_rejects_devops_role_from_broad_stack_description():
+    job = _job(title="DevOps Engineer")
+    job["description"] = "Our broad stack includes .NET, Java, Python, Go and Ruby."
+    assert _source([job]).search(".NET Developer", "Poland") == []

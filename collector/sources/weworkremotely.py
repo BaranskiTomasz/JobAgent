@@ -7,7 +7,7 @@ import httpx
 
 from collector.base import JobSource, RawJob
 from collector.location import location_matches
-from collector.query_matcher import job_matches_query
+from collector.query_matcher import job_matches_query_with_focused_description
 from collector.utils import strip_html
 
 
@@ -104,7 +104,9 @@ class WWRSource(JobSource):
             else:
                 company, job_title = "", raw_title
             description = strip_html(item.findtext("description") or "")
-            if not job_matches_query(title, job_title, description):
+            if not job_matches_query_with_focused_description(
+                title, job_title, description,
+            ):
                 continue
             query_matched += 1
             try:

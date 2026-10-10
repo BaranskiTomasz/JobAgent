@@ -20,11 +20,6 @@
     "source": "greenhouse"
   },
   {
-    "name": "Amplitude",
-    "slug": "amplitude",
-    "source": "greenhouse"
-  },
-  {
     "name": "Anaplan",
     "slug": "anaplan",
     "source": "greenhouse"
@@ -170,11 +165,6 @@
     "source": "lever"
   },
   {
-    "name": "Forethought",
-    "slug": "forethought",
-    "source": "greenhouse"
-  },
-  {
     "name": "Front",
     "slug": "frontcareers",
     "source": "ashby"
@@ -218,16 +208,6 @@
     "name": "Highspot",
     "slug": "highspot",
     "source": "lever"
-  },
-  {
-    "name": "Hightouch",
-    "slug": "hightouch",
-    "source": "greenhouse"
-  },
-  {
-    "name": "HubSpot",
-    "slug": "hubspotjobs",
-    "source": "greenhouse"
   },
   {
     "name": "Intercom",
@@ -280,11 +260,6 @@
     "source": "greenhouse"
   },
   {
-    "name": "Lightspeed Commerce",
-    "slug": "lightspeedhq",
-    "source": "greenhouse"
-  },
-  {
     "name": "Machinify",
     "slug": "machinifyinc",
     "source": "greenhouse"
@@ -307,11 +282,6 @@
   {
     "name": "Moloco",
     "slug": "moloco",
-    "source": "greenhouse"
-  },
-  {
-    "name": "Moveworks",
-    "slug": "moveworks",
     "source": "greenhouse"
   },
   {
@@ -380,11 +350,6 @@
     "source": "ashby"
   },
   {
-    "name": "Regrello",
-    "slug": "regrello",
-    "source": "lever"
-  },
-  {
     "name": "Runway",
     "slug": "runway",
     "source": "ashby"
@@ -427,11 +392,6 @@
   {
     "name": "SurveyMonkey",
     "slug": "surveymonkey",
-    "source": "greenhouse"
-  },
-  {
-    "name": "Tekion",
-    "slug": "tekion",
     "source": "greenhouse"
   },
   {
@@ -530,11 +490,6 @@
     "source": "greenhouse"
   },
   {
-    "name": "Cerebras",
-    "slug": "cerebrassystems",
-    "source": "greenhouse"
-  },
-  {
     "name": "Chainguard",
     "slug": "chainguard",
     "source": "greenhouse"
@@ -542,11 +497,6 @@
   {
     "name": "CLEAR",
     "slug": "clear",
-    "source": "greenhouse"
-  },
-  {
-    "name": "ClickHouse",
-    "slug": "clickhouse",
     "source": "greenhouse"
   },
   {
@@ -602,11 +552,6 @@
   {
     "name": "Dataiku",
     "slug": "dataiku",
-    "source": "greenhouse"
-  },
-  {
-    "name": "dbt Labs",
-    "slug": "dbtlabsinc",
     "source": "greenhouse"
   },
   {
@@ -685,16 +630,6 @@
     "source": "greenhouse"
   },
   {
-    "name": "Headway",
-    "slug": "headway",
-    "source": "greenhouse"
-  },
-  {
-    "name": "Hex",
-    "slug": "hextechnologies",
-    "source": "greenhouse"
-  },
-  {
     "name": "Illumio",
     "slug": "illumio",
     "source": "ashby"
@@ -733,11 +668,6 @@
     "name": "MongoDB",
     "slug": "mongodb",
     "source": "greenhouse"
-  },
-  {
-    "name": "Mosey",
-    "slug": "mosey",
-    "source": "ashby"
   },
   {
     "name": "Mozilla",
@@ -820,11 +750,6 @@
     "source": "lever"
   },
   {
-    "name": "SpruceID",
-    "slug": "sprucesystems",
-    "source": "lever"
-  },
-  {
     "name": "StackBlitz",
     "slug": "stackblitz",
     "source": "greenhouse"
@@ -858,11 +783,6 @@
     "name": "Teleport",
     "slug": "goteleport",
     "source": "ashby"
-  },
-  {
-    "name": "Temporal",
-    "slug": "temporaltechnologies",
-    "source": "greenhouse"
   },
   {
     "name": "Tines",

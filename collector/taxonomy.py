@@ -1,6 +1,7 @@
 import re
 import unicodedata
 from dataclasses import dataclass
+from functools import lru_cache
 
 
 def normalize_text(value: str) -> str:
@@ -59,6 +60,7 @@ def _contains_phrase(text: str, phrase: str) -> bool:
     return bool(re.search(rf"(?<![a-z0-9]){re.escape(normalized_phrase)}(?![a-z0-9])", text))
 
 
+@lru_cache(maxsize=25_000)
 def classify_text(*values: str | None) -> Classification:
     text = normalize_text(" ".join(value or "" for value in values))
     technologies = {

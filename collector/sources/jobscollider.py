@@ -1,18 +1,49 @@
 """JobsCollider's public search endpoint, without authentication."""
 
 from datetime import datetime, timedelta, timezone
+import re
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
 from collector.base import JobSource, RawJob
 from collector.location import location_matches
-from collector.query_matcher import job_matches_query
+from collector.query_matcher import job_matches_query_with_focused_description
+from collector.taxonomy import classify_text
 from collector.utils import strip_html
 
 _API_URL = "https://jobscollider.com/api/search-jobs"
 _PAGE_SIZE = 100
 _MAX_PAGES = 5
+
+_LOCATION_FIELDS = (
+    "locations", "location", "job_location", "jobLocation",
+    "candidate_required_location", "candidateRequiredLocation",
+    "candidate_location", "candidateLocation", "remote_location",
+    "remoteLocation", "remote_regions", "remoteRegions", "country",
+    "country_name", "countryName", "country_code", "countryCode",
+    "countries", "eligible_countries", "eligibleCountries",
+    "location_restrictions", "locationRestrictions",
+)
+_DESCRIPTION_FIELDS = ("description", "job_description", "jobDescription", "content", "body")
+_COUNTRY_PATTERN = (
+    r"united states|united states of america|u\.?s\.?a?\.?|usa|"
+    r"canada|india|poland|polska|bulgaria|bułgaria|bulgariya|"
+    r"europe|european union|emea|eea|worldwide|global|anywhere"
+)
+_LOCATION_RESTRICTION_PATTERNS = (
+    rf"\bremote(?:ly)?\s+(?:in|from)\s+(?:the\s+)?(?:{_COUNTRY_PATTERN})\b",
+    rf"\bremote\s*[-–—|:]\s*(?:in\s+)?(?:the\s+)?(?:{_COUNTRY_PATTERN})\b",
+    rf"\b(?:work|working|based|located|reside|residents?|candidates?|applicants?|"
+    rf"employees?|hiring|employment|position|role)\s+(?:in|from|within|of)\s+"
+    rf"(?:the\s+)?(?:{_COUNTRY_PATTERN})\b",
+    rf"\b(?:only|available)\s+(?:in|for)\s+(?:the\s+)?(?:{_COUNTRY_PATTERN})\b",
+)
+_GENERIC_REMOTE_LOCATIONS = {"remote", "remote only", "fully remote", "100% remote"}
+_EXPLICIT_SOFTWARE_SECURITY_TITLE = (
+    r"\bsoftware\s+security\s+(?:engineer|developer)\b|"
+    r"\bsecurity\s+software\s+(?:engineer|developer)\b"
+)
 
 
 def _published_at(value: object) -> datetime | None:
@@ -43,19 +74,84 @@ def _url_key(url: str) -> str:
 def _location_values(value: object) -> list[str]:
     if isinstance(value, str):
         return [value.strip()] if value.strip() else []
+    if isinstance(value, dict):
+        values = []
+        for key in ("name", "location", "country", "city", "label", "value", "code"):
+            if key in value:
+                values.extend(_location_values(value[key]))
+        return list(dict.fromkeys(values))
     if not isinstance(value, list):
         return []
     values = []
     for item in value:
-        if isinstance(item, str) and item.strip():
-            values.append(item.strip())
-        elif isinstance(item, dict):
-            for key in ("name", "location", "country", "city"):
-                text = item.get(key)
-                if text:
-                    values.append(str(text).strip())
-                    break
+        values.extend(_location_values(item))
     return list(dict.fromkeys(values))
+
+
+def _job_location_values(job: dict) -> list[str]:
+    values = []
+    for key in _LOCATION_FIELDS:
+        values.extend(_location_values(job.get(key)))
+    return list(dict.fromkeys(values))
+
+
+def _job_description(job: dict) -> str:
+    for key in _DESCRIPTION_FIELDS:
+        value = job.get(key)
+        if value:
+            return strip_html(str(value)) or ""
+    return ""
+
+
+def _text_location_allowed(text: str, candidate_location: str) -> bool:
+    return all(
+        location_matches(match.group(0), candidate_location)
+        for pattern in _LOCATION_RESTRICTION_PATTERNS
+        for match in re.finditer(pattern, text, re.IGNORECASE)
+    )
+
+
+def _title_location_allowed(title: str, candidate_location: str) -> bool:
+    return all(
+        location_matches(match.group(0), candidate_location)
+        for match in re.finditer(
+            rf"(?:@|[-–—|,(])[^\n(){{}}]{{0,70}}\b(?:{_COUNTRY_PATTERN})\b\s*\)?$",
+            title,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _location_is_eligible(job: dict, description: str, candidate_location: str) -> bool:
+    values = _job_location_values(job)
+    explicit_values = [
+        value for value in values
+        if value.casefold().strip() not in _GENERIC_REMOTE_LOCATIONS
+    ]
+    if explicit_values and not any(location_matches(value, candidate_location) for value in explicit_values):
+        return False
+    searchable = " ".join(
+        str(value or "") for value in (
+            job.get("title"), job.get("job_title"), description, *values,
+        )
+    )
+    return _text_location_allowed(searchable, candidate_location) and _title_location_allowed(
+        str(job.get("title") or job.get("job_title") or ""), candidate_location,
+    )
+
+
+def _matches_query(query: str, title: str, details: str) -> bool:
+    if not job_matches_query_with_focused_description(query, title, details):
+        return False
+    requested = classify_text(query)
+    title_categories = classify_text(title)
+    if (
+        requested.role_families == {"software_engineering"}
+        and "security" in title_categories.role_families
+        and not re.search(_EXPLICIT_SOFTWARE_SECURITY_TITLE, title, re.IGNORECASE)
+    ):
+        return False
+    return True
 
 
 class JobsColliderSource(JobSource):
@@ -157,11 +253,11 @@ class JobsColliderSource(JobSource):
         query_matched = date_matched = geo_matched = known_url_filtered = 0
         for job in jobs:
             job_title = str(job.get("title") or job.get("job_title") or "").strip()
-            description = strip_html(str(job.get("description") or "")) or ""
+            description = _job_description(job)
             details = "\n".join(
                 str(job.get(key) or "") for key in ("category", "tags", "skills")
             )
-            if title.strip() and not job_matches_query(title, job_title, details + "\n" + description):
+            if title.strip() and not _matches_query(title, job_title, details + "\n" + description):
                 continue
             query_matched += 1
             published = _published_at(job.get("published_at") or job.get("date_posted") or job.get("created_at"))
@@ -177,9 +273,9 @@ class JobsColliderSource(JobSource):
                 continue
             if url_key in seen_keys:
                 continue
-            locations = _location_values(job.get("locations") or job.get("location"))
+            locations = _job_location_values(job)
             location_text = ", ".join(locations) if locations else "Remote"
-            if locations and not any(location_matches(item, location) for item in locations):
+            if not _location_is_eligible(job, description, location):
                 continue
             geo_matched += 1
             if max_results and len(results) >= max_results:

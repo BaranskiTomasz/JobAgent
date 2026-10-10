@@ -215,6 +215,26 @@ class TestRemotiveSourceSearch:
         src = _build_source([job])
         assert src.search("PHP Developer", "Remote") == []
 
+    def test_generic_stack_list_does_not_match_every_technology(self):
+        job = _make_job(
+            title="Software Engineer",
+            description=(
+                "Join our team. Our technology stack includes PHP, Python, Node.js, "
+                "Java, .NET and Go."
+            ),
+        )
+        src = _build_source([job])
+        assert src.search("PHP Developer", "Remote") == []
+        assert src.search("Python Developer", "Remote") == []
+
+    def test_focused_description_technology_still_matches(self):
+        job = _make_job(
+            title="Senior Backend Engineer",
+            description="Build production services written in PHP.",
+        )
+        src = _build_source([job])
+        assert len(src.search("PHP Developer", "Remote")) == 1
+
     def test_records_search_funnel(self):
         src = _build_source([
             _make_job(job_id=1),

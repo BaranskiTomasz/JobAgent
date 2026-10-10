@@ -144,6 +144,25 @@ class TestWWRSourceSearch:
         src = _build_source([_item_xml(title="Acme: Senior Backend Engineer")])
         assert len(src.search("Software Engineer", "Remote")) == 1
 
+    def test_generic_stack_list_does_not_match_every_technology(self):
+        src = _build_source([_item_xml(
+            title="Acme: Software Engineer",
+            description=(
+                "Join our team. Our technology stack includes PHP, Python, Node.js, "
+                "Java, .NET and Go."
+            ),
+        )])
+        assert src.search("PHP Developer", "Remote") == []
+        assert src.search("Java Developer", "Remote") == []
+        assert src.search("Go Developer", "Remote") == []
+
+    def test_focused_description_technology_still_matches(self):
+        src = _build_source([_item_xml(
+            title="Acme: Senior Backend Engineer",
+            description="Build production services written in PHP.",
+        )])
+        assert len(src.search("PHP Developer", "Remote")) == 1
+
     def test_native_remote_facts_are_preserved(self):
         src = _build_source([_item_xml(region="Europe Only")])
         result = src.search("PHP Developer", "Poland")[0]

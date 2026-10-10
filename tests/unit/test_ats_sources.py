@@ -157,3 +157,29 @@ def test_ats_search_filters_title_date_location_and_known_url():
     ])
     result = source.search("Python", "Poland", known_urls={"https://c/1"})
     assert [job.url for job in result] == ["https://a/1"]
+
+
+def test_ats_search_matches_role_alias_with_focused_technology_description():
+    source = GreenhouseSource()
+    now = datetime.now(timezone.utc).isoformat()
+    source._fetch_jobs = MagicMock(return_value=[
+        RawJob(
+            "Backend Engineer", "A", "Remote - Europe", "https://a/1", "greenhouse",
+            description="Build Python services for a distributed product team.", posted_at=now,
+        ),
+    ])
+
+    assert [job.url for job in source.search("Python Developer", "Poland")] == ["https://a/1"]
+
+
+def test_ats_search_rejects_technology_found_only_in_broad_stack_inventory():
+    source = GreenhouseSource()
+    now = datetime.now(timezone.utc).isoformat()
+    source._fetch_jobs = MagicMock(return_value=[
+        RawJob(
+            "DevOps Engineer", "A", "Remote - Europe", "https://a/1", "greenhouse",
+            description="Our teams use Python, PHP, Java, Go, React and Angular.", posted_at=now,
+        ),
+    ])
+
+    assert source.search("Python Developer", "Poland") == []

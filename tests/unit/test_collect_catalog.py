@@ -34,8 +34,11 @@ def test_catalog_rejects_explicit_linkedin_source():
         catalog_sources(["linkedin", "greenhouse"])
 
 
-def test_catalog_run_extracts_shared_pending_jobs():
-    pending = [{"id": "survivor", "description": "Remote Python role"}]
+def test_catalog_run_extracts_only_jobs_added_by_current_run():
+    pending = [
+        {"id": "survivor", "description": "Old remote Python role"},
+        {"id": "original", "description": "New remote Python role"},
+    ]
     with patch("sys.argv", ["collect_catalog.py", "--max-jobs", "3"]), \
          patch("scripts.collect_catalog.run", return_value={
              "jobs_found": 1, "jobs_new": 1, "job_ids": ["original"],
@@ -45,4 +48,17 @@ def test_catalog_run_extracts_shared_pending_jobs():
         assert main() == 0
 
     missing.assert_called_once_with(FACT_SCHEMA_VERSION, 3, catalog=True)
-    extract.assert_called_once_with(pending, catalog=True)
+    extract.assert_called_once_with([pending[1]], catalog=True)
+
+
+def test_catalog_run_does_not_extract_backlog_when_current_jobs_are_not_pending():
+    pending = [{"id": "survivor", "description": "Old remote Python role"}]
+    with patch("sys.argv", ["collect_catalog.py", "--max-jobs", "3"]), \
+         patch("scripts.collect_catalog.run", return_value={
+             "jobs_found": 1, "jobs_new": 1, "job_ids": ["original"],
+         }), \
+         patch("scripts.collect_catalog.job_repository.get_missing_facts", return_value=pending), \
+         patch("scripts.collect_catalog.run_extraction", return_value=1) as extract:
+        assert main() == 0
+
+    extract.assert_not_called()

@@ -228,7 +228,7 @@ def _collect_job_cards(
         logger.info(f"\n[{source_id}] Starting source...")
         source_error_recorded = False
         try:
-            source = make_source(source_id, days_back=days_back)
+            source = make_source(source_id, days_back=days_back, catalog=catalog)
 
             with source:
                 source.login()

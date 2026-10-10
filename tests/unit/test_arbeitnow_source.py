@@ -54,19 +54,53 @@ def test_filters_non_remote_title_location_date_and_known_urls():
     assert result == []
 
 
-def test_fetch_jobs_paginates_until_cutoff_and_caches():
+def test_fetch_jobs_follows_next_even_when_a_page_contains_old_jobs_and_caches():
     recent = [_job("recent")]
     old = [_job("old", days_ago=10)]
     first = MagicMock()
     first.json.return_value = {"data": recent, "links": {"next": "page-2"}}
     second = MagicMock()
     second.json.return_value = {"data": old, "links": {"next": "page-3"}}
+    third = MagicMock()
+    third.json.return_value = {"data": [], "links": {"next": None}}
     source = ArbeitnowSource(days_back=7)
     source._client = MagicMock()
-    source._client.get.side_effect = [first, second]
+    source._client.get.side_effect = [first, second, third]
     assert len(source._fetch_jobs()) == 2
     assert len(source._fetch_jobs()) == 2
+    assert source._client.get.call_count == 3
+
+
+def test_fetch_jobs_retries_rate_limit_using_bounded_retry_after():
+    limited = MagicMock(status_code=429, headers={"Retry-After": "120"})
+    success = MagicMock(status_code=200, headers={})
+    success.json.return_value = {"data": [_job("recent")], "links": {"next": None}}
+    sleep = MagicMock()
+    source = ArbeitnowSource(days_back=7, sleep=sleep)
+    source._client = MagicMock()
+    source._client.get.side_effect = [limited, success]
+
+    assert len(source._fetch_jobs()) == 1
     assert source._client.get.call_count == 2
+    sleep.assert_called_once_with(30.0)
+
+
+def test_fetch_jobs_reports_error_after_rate_limit_retries_are_exhausted():
+    request = httpx.Request("GET", "https://www.arbeitnow.com/api/job-board-api")
+
+    def limited_response():
+        response = httpx.Response(429, headers={"Retry-After": "0"}, request=request)
+        return response
+
+    sleep = MagicMock()
+    source = ArbeitnowSource(days_back=7, sleep=sleep)
+    source._client = MagicMock()
+    source._client.get.side_effect = [limited_response(), limited_response()]
+
+    assert source._fetch_jobs() == []
+    assert source._fetch_diagnostics["source_status"] == "error"
+    assert source._fetch_diagnostics["api_complete"] is False
+    assert sleep.call_count == 1
 
 
 def test_fetch_jobs_stops_before_provider_rate_limit_page():
@@ -79,6 +113,8 @@ def test_fetch_jobs_stops_before_provider_rate_limit_page():
     source._fetch_jobs()
 
     assert source._client.get.call_count == _MAX_PAGES
+    assert source._fetch_diagnostics["api_page_limit_reached"] is True
+    assert source._fetch_diagnostics["api_complete"] is False
 
 
 def test_later_page_failure_is_reported_as_partial():

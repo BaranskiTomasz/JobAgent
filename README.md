@@ -203,6 +203,7 @@ Edit `.env`:
 ```
 ANTHROPIC_API_KEY=sk-ant-...
 VOYAGE_API_KEY=pa-...
+CLAUDE_CATALOG_EXTRACT_MODEL=claude-haiku-5-5  # optional; this is the default
 JOBAGENTWEB_BASE_URL=http://10.66.0.1:8000   # only if different from the default
 JOBAGENT_API_KEY=...                         # optional — see .env.example
 ```
@@ -454,9 +455,9 @@ Distillation is triggered as a pipeline step — not on every decision:
 
 #### 3. Structured extraction
 
-`extractor/runner.py` — runs with **Claude Haiku 4.5** and tool use. Runs **before** scoring — the dealbreaker filter and the scorer both read `structured_data`, so a freshly-collected job needs to be extracted before either can use it.
+`extractor/runner.py` uses **Claude Haiku 4.5** for personalized jobs and **Claude Haiku 5.5** for the public catalog. Both paths use the existing `ANTHROPIC_API_KEY`; no additional provider key is required. `CLAUDE_CATALOG_EXTRACT_MODEL` can override the catalog model. Extraction runs **before** scoring — the dealbreaker filter and the scorer both read `structured_data`, so a freshly-collected personalized job needs to be extracted before either can use it.
 
-Public catalog extraction uses a cost-saving first pass with a small schema containing only remote, hybrid, region, and PL/BG eligibility. Only postings that are explicitly non-remote, hybrid, or unavailable from both supported countries stop there; matching and uncertain postings continue to the complete extraction below. Gate-only facts carry `_extraction_tier=catalog_gate`, so the public queue does not repeatedly process a known ineligible posting. If that posting later enters a user's personal pool, JobAgentWeb deliberately places it back in the personal extraction queue and replaces the gate result with complete facts before scoring.
+Public catalog extraction uses a cost-saving first pass with a small schema containing only remote, hybrid, region, and PL/BG eligibility. A posting continues to full extraction only when it contains positive evidence that remote work from Poland or Bulgaria is allowed. Generic `Remote`, an empty location, and unknown eligibility are not treated as worldwide access. Gate-only facts carry `_extraction_tier=catalog_gate`, so the public queue does not repeatedly process an ineligible or unverified posting. If that posting later enters a user's personal pool, JobAgentWeb deliberately places it back in the personal extraction queue and replaces the gate result with complete facts before scoring. If the catalog model fails, the extractor retries that call with Haiku 4.5.
 
 Extraction reads the complete cleaned description retained for the source and writes schema version 5. Besides the compatibility fields consumed by the existing evaluator, it captures role family and specialization, seniority range, responsibilities, normalized skills with required/preferred/core semantics, multiple compensation bands, country eligibility and engagement modes, timezone/core hours, work authorization, EOR/visa signals, languages, company stage, team size, travel, office visits, and on-call duties. Work mode is represented explicitly by `remote_available`, `hybrid_available`, and `office_presence_required`; a listing that merely mentions hybrid work is no longer rejected when it also allows fully remote work without mandatory office attendance.
 
@@ -582,7 +583,8 @@ Divergence cases are fed back into the next distillation run as high-priority si
 | Stage | Model | Cost approx. |
 |-------|-------|-------------|
 | Distillation | Opus 4.8 | ~$0.40/run (50 jobs × 1500 chars) |
-| Extraction | Haiku 4.5 | ~$0.001/job |
+| Personalized extraction | Haiku 4.5 | usage-dependent |
+| Public catalog extraction | Haiku 5.5 | ~$0.0002 gate; ~$0.0007 full extraction |
 | Dealbreaker filter | — (deterministic) | free |
 | Scoring | Sonnet 4.6 | ~$0.007/job |
 | Embedding | Voyage voyage-3-large | $0.18/1M tokens |
@@ -592,7 +594,7 @@ Divergence cases are fed back into the next distillation run as high-priority si
 
 **Distillation runs once per Run Agent / Re-score, not on every decision.** This is the most expensive step; the budget is fixed (~50 jobs in context) regardless of total job count. The dealbreaker filter catches some jobs before scoring ever runs, reducing Sonnet spend for a candidate with a firm salary floor or remote-only requirement.
 
-Catalog extraction caches its static tool schemas for the duration of an active Anthropic cache window. It also uses the small eligibility gate before full extraction, so clearly ineligible catalog postings do not generate the large structured document. Uncertain eligibility always falls through to full extraction to protect recall.
+Catalog extraction caches its static tool schemas for the duration of an active Anthropic cache window. It also uses the small eligibility gate before full extraction, so ineligible or geographically unverified catalog postings do not generate the large structured document.
 
 **Listwise ranking + debate are skipped only when the top-20 candidate set and its ranking fingerprint are unchanged** (`ranker/rank_cache.py`). The fingerprint covers the candidate profile, questionnaire, learned preferences, job content and ranking implementation/model inputs, so changing those inputs forces a fresh ranking even when the job IDs stay the same.
 

@@ -88,7 +88,9 @@ def main() -> int:
         pending = job_repository.get_missing_facts(
             FACT_SCHEMA_VERSION, extraction_limit, catalog=True,
         )
-        extracted = run_extraction(pending, catalog=True)
+        current_run_ids = set(result["job_ids"])
+        pending = [job for job in pending if job.get("id") in current_run_ids]
+        extracted = run_extraction(pending, catalog=True) if pending else 0
         logging.info("Catalog extraction complete: extracted=%s", extracted)
     return 0
 

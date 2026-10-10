@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from extractor.runner import (
     _EXTRACT_TOOL,
+    _catalog_extract,
     _catalog_gate_rejects,
     _merge_source_structured_data,
     _normalize_facts,
@@ -234,13 +235,13 @@ def test_run_extraction_continues_after_one_malformed_job(mock_extract, mock_gat
     assert mock_repo.update_facts.call_args.args[0] == "good"
 
 
-def test_catalog_gate_rejects_only_explicit_ineligibility():
+def test_catalog_gate_requires_positive_geographic_evidence():
     assert _catalog_gate_rejects({"remote": False}) is True
-    assert _catalog_gate_rejects({"remote": True, "hybrid": True}) is False
+    assert _catalog_gate_rejects({"remote": True, "hybrid": True}) is True
     assert _catalog_gate_rejects({
         "remote_available": True, "hybrid_available": True,
         "office_presence_required": False,
-    }) is False
+    }) is True
     assert _catalog_gate_rejects({
         "remote_available": True, "hybrid_available": True,
         "office_presence_required": True,
@@ -252,7 +253,7 @@ def test_catalog_gate_rejects_only_explicit_ineligibility():
     assert _catalog_gate_rejects({"remote": True, "country_eligibility": [
         {"country_code": "PL", "eligible": None},
         {"country_code": "BG", "eligible": False},
-    ]}) is False
+    ]}) is True
 
 
 @patch("extractor.runner.job_repository")
@@ -279,15 +280,77 @@ def test_catalog_gate_skips_full_extraction_for_explicitly_ineligible_job(mock_g
 @patch("extractor.runner.job_repository")
 @patch("extractor.runner.extract_job")
 @patch("extractor.runner.extract_catalog_gate")
-def test_catalog_gate_runs_full_extraction_when_eligibility_is_unknown(mock_gate, mock_extract, mock_repo):
+def test_catalog_gate_rejects_missing_geographic_evidence(mock_gate, mock_extract, mock_repo):
     mock_gate.return_value = {"remote": True, "hybrid": False, "remote_regions": []}
     mock_extract.return_value = {"remote": True, "hybrid": False, "summary": "Remote role"}
     jobs = [{"id": "unknown", "title": "Engineer", "company": "Co", "description": "Remote"}]
 
     assert run_extraction(jobs, catalog=True) == 1
-    mock_extract.assert_called_once()
+    mock_extract.assert_not_called()
     saved = mock_repo.update_facts.call_args.args[4]
-    assert saved["_extraction_tier"] == "full"
+    assert saved["_extraction_tier"] == "catalog_gate"
+
+
+def test_catalog_gate_rejects_unknown_country_eligibility():
+    assert _catalog_gate_rejects({
+        "remote": True,
+        "remote_regions": [],
+        "country_eligibility": [
+            {"country_code": "PL", "eligible": None},
+            {"country_code": "BG", "eligible": None},
+        ],
+    }) is True
+
+
+def test_catalog_gate_accepts_explicit_region_evidence():
+    assert _catalog_gate_rejects({
+        "remote": True,
+        "remote_regions": ["Europe"],
+        "country_eligibility": [
+            {"country_code": "PL", "eligible": True, "evidence": "Remote in Europe"},
+            {"country_code": "BG", "eligible": True, "evidence": "Remote in Europe"},
+        ],
+    }) is False
+
+
+@patch("extractor.runner.CLAUDE_EXTRACT_MODEL", "claude-haiku-4-5-20251001")
+@patch("extractor.runner.CLAUDE_CATALOG_EXTRACT_MODEL", "claude-haiku-5-5")
+def test_catalog_extraction_uses_catalog_model():
+    function = MagicMock(return_value={"remote": True})
+
+    assert _catalog_extract(function, "Description", "remotive") == {"remote": True}
+    function.assert_called_once_with("Description", "remotive", "claude-haiku-5-5")
+
+
+@patch("extractor.runner.CLAUDE_EXTRACT_MODEL", "claude-haiku-4-5-20251001")
+@patch("extractor.runner.CLAUDE_CATALOG_EXTRACT_MODEL", "claude-haiku-5-5")
+def test_catalog_extraction_falls_back_to_existing_model():
+    function = MagicMock(side_effect=[{}, {"remote": True}])
+
+    assert _catalog_extract(function, "Description", "remotive") == {"remote": True}
+    assert function.call_args_list == [
+        (("Description", "remotive", "claude-haiku-5-5"), {}),
+        (("Description", "remotive", "claude-haiku-4-5-20251001"), {}),
+    ]
+
+
+@patch("extractor.runner.job_repository")
+@patch("extractor.runner.extract_job")
+@patch("extractor.runner.extract_catalog_gate")
+def test_catalog_region_provenance_preserves_source_native_evidence(mock_gate, mock_extract, mock_repo):
+    mock_gate.return_value = {}
+    mock_extract.return_value = {"remote": True}
+    jobs = [{
+        "id": "pl-source", "title": "Engineer", "company": "Co", "description": "Remote",
+        "source_structured_data": {"remote": True, "remote_regions": ["Poland"]},
+    }]
+
+    assert run_extraction(jobs, catalog=True) == 1
+    mock_extract.assert_called_once()
+    provenance = mock_repo.update_facts.call_args.args[5]
+    assert provenance["country_eligibility"]["source_type"] == "source_native"
+    assert provenance["country_eligibility"]["confidence"] == 1.0
+    assert provenance["country_eligibility"]["evidence"] == "Poland"
 
 
 class TestMergeSourceStructuredData:

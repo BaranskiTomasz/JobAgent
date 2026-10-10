@@ -8,7 +8,8 @@ import httpx
 
 from collector.base import JobSource, RawJob
 from collector.location import location_matches
-from collector.query_matcher import job_matches_query, query_tokens
+from collector.query_matcher import job_matches_query_with_focused_description
+from collector.taxonomy import Classification, classify_text
 
 _BOARDS_FILE = Path(__file__).with_name("ats_companies.json")
 
@@ -45,7 +46,9 @@ class ATSBoardSource(JobSource):
         self._days_back = days_back
         self._client: httpx.Client | None = None
         self._jobs_cache: list[RawJob] | None = None
-        self._search_index: list[tuple[RawJob, set[str], set[str], datetime | None]] | None = None
+        self._search_index: list[
+            tuple[RawJob, Classification, Classification, datetime | None]
+        ] | None = None
         entries = json.loads(_BOARDS_FILE.read_text(encoding="utf-8"))
         self._boards = [entry for entry in entries if entry["source"] == self.provider]
 
@@ -103,19 +106,29 @@ class ATSBoardSource(JobSource):
             self._search_index = [
                 (
                     job,
-                    set(query_tokens(job.title)),
-                    set(query_tokens(f"{job.title} {job.description or ''}")),
+                    classify_text(job.title),
+                    classify_text(job.title, job.description),
                     _parse_iso(job.posted_at),
                 )
                 for job in jobs
             ]
-        required = set(query_tokens(title))
+        requested = classify_text(title)
         results: list[RawJob] = []
         query_matched = 0
         date_matched = 0
         geo_matched = 0
-        for job, title_tokens, available, published in self._search_index:
-            if not required or not required.issubset(available) or not job_matches_query(title, job.title, job.description):
+        for job, title_categories, all_categories, published in self._search_index:
+            if requested.role_families and not requested.role_families.issubset(
+                title_categories.role_families,
+            ):
+                continue
+            if requested.technologies and not requested.technologies.issubset(
+                all_categories.technologies,
+            ):
+                continue
+            if not title.strip() or not job_matches_query_with_focused_description(
+                title, job.title, job.description,
+            ):
                 continue
             query_matched += 1
             if not published or published < cutoff:

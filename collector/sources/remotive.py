@@ -5,7 +5,7 @@ import httpx
 
 from collector.base import JobSource, RawJob
 from collector.location import location_matches
-from collector.query_matcher import job_matches_query
+from collector.query_matcher import job_matches_query_with_focused_description
 from collector.utils import strip_html
 
 _API_URL = "https://remotive.com/api/remote-jobs"
@@ -70,7 +70,9 @@ class RemotiveSource(JobSource):
             if max_results and len(results) >= max_results:
                 break
             description = strip_html(job.get("description", ""))
-            if not job_matches_query(title, job.get("title", ""), description):
+            if not job_matches_query_with_focused_description(
+                title, job.get("title", ""), description,
+            ):
                 continue
             query_matched += 1
 

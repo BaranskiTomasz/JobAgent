@@ -126,11 +126,42 @@ class TestWorkingNomadsSearch:
         src = _build_source([job])
         assert src.search("PHP Developer", "Remote") == []
 
+    def test_generic_stack_description_does_not_match_every_technology(self):
+        job = _make_job(
+            title="React Full-stack Engineer",
+            tags="react,php,java,go",
+            description=(
+                "Join our team. Our technology stack includes PHP, Python, Node.js, "
+                "Java, .NET and Go."
+            ),
+        )
+        src = _build_source([job])
+        assert src.search("PHP Developer", "Remote") == []
+        assert src.search("Java Developer", "Remote") == []
+
+    def test_focused_description_technology_still_matches(self):
+        job = _make_job(
+            title="Senior Backend Engineer",
+            tags="backend",
+            description="Build production services written in PHP.",
+        )
+        src = _build_source([job])
+        assert len(src.search("PHP Developer", "Remote")) == 1
+
     def test_excludes_job_with_no_keyword_match(self):
         job = _make_job(job_id=1, title="Python Developer", tags="python")
         src = _build_source([job])
         results = src.search("PHP", "Remote")
         assert results == []
+
+    def test_qa_excludes_content_rating_role(self):
+        job = _make_job(
+            title="Quality Assurance Rater - Spanish",
+            tags="quality assurance",
+            description="Evaluate search results for quality and relevance",
+        )
+        src = _build_source([job])
+        assert src.search("QA Engineer", "Remote") == []
 
     def test_skips_known_urls(self):
         job = _make_job(job_id=5)

@@ -306,6 +306,21 @@ class TestCollectJobCardsBudgetAllocation:
     @patch("collector.runner.search_stats_repository")
     @patch("collector.runner.job_repository")
     @patch("collector.runner.make_source")
+    def test_catalog_mode_is_passed_to_source_factory(self, mock_make_source, mock_jobs, mock_stats):
+        source = _mock_source()
+        mock_make_source.return_value = source
+
+        _collect_job_cards(
+            ["remotive"], ["PHP Developer"], ["Poland"],
+            days_back=10, max_jobs=None, known_urls=set(), rejected_kw=[], session_id=1,
+            catalog=True,
+        )
+
+        mock_make_source.assert_called_once_with("remotive", days_back=10, catalog=True)
+
+    @patch("collector.runner.search_stats_repository")
+    @patch("collector.runner.job_repository")
+    @patch("collector.runner.make_source")
     def test_max_jobs_split_fairly_across_sources(self, mock_make_source, mock_jobs, mock_stats):
         def _source_with_jobs(n, source_name):
             source = _mock_source()
