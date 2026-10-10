@@ -56,6 +56,93 @@ _REMOTE_MODE_TOKENS = {
 }
 
 
+# extractor/runner.py schema enums and constants
+_SALARY_UNIT_TO_PERIOD = {"month": "monthly", "hour": "hourly", "year": "yearly"}
+_KNOWN_SALARY_CURRENCIES = {"PLN", "EUR", "USD", "GBP"}
+_EXPERIENCE_LEVEL_MAP = {
+    "junior": "junior",
+    "regular": "mid",
+    "mid": "mid",
+    "senior": "senior",
+    "lead": "lead",
+    "director": "director",
+}
+
+
+def _skill_name(skill) -> str | None:
+    if isinstance(skill, dict):
+        name = skill.get("name")
+        return str(name) if name else None
+    if skill:
+        return str(skill)
+    return None
+
+
+def _extract_source_structured_data(offer: dict) -> dict:
+    """Return fields solid.jobs exposes natively in its listing offer objects."""
+    data: dict = {"_salary_disclosed": False}
+
+    exp = offer.get("experienceLevel")
+    if exp and isinstance(exp, str):
+        mapped_seniority = _EXPERIENCE_LEVEL_MAP.get(exp.strip().lower())
+        if mapped_seniority:
+            data["seniority"] = mapped_seniority
+
+    sr = offer.get("salaryRange")
+    if not isinstance(sr, dict):
+        sr = offer.get("normalizedSalaryRange") if isinstance(offer.get("normalizedSalaryRange"), dict) else {}
+    if sr:
+        lb = sr.get("lowerBound")
+        ub = sr.get("upperBound")
+        currency = sr.get("currency")
+        period_raw = sr.get("salaryPeriod")
+        period = _SALARY_UNIT_TO_PERIOD.get(str(period_raw).strip().lower()) if period_raw else None
+        if (
+            lb is not None
+            and ub is not None
+            and currency in _KNOWN_SALARY_CURRENCIES
+            and period is not None
+        ):
+            data["salary_min"] = round(lb)
+            data["salary_max"] = round(ub)
+            data["_salary_disclosed"] = True
+            data["salary_currency"] = currency
+            data["salary_period"] = period
+    else:
+        # Fallback for old / legacy payload shapes if ever encountered
+        salary = offer.get("salary") if isinstance(offer.get("salary"), dict) else {}
+        salary_min = salary.get("from") or offer.get("salaryMin")
+        salary_max = salary.get("to") or offer.get("salaryMax")
+        currency = salary.get("currency") or offer.get("salaryCurrency")
+        if salary_min is not None or salary_max is not None:
+            data["_salary_disclosed"] = True
+            if salary_min is not None:
+                data["salary_min"] = round(salary_min)
+            if salary_max is not None:
+                data["salary_max"] = round(salary_max)
+            if currency in _KNOWN_SALARY_CURRENCIES:
+                data["salary_currency"] = currency
+
+    skills = offer.get("requiredSkills") or []
+    req_names = []
+    pref_names = []
+    for s in skills:
+        name = _skill_name(s)
+        if not name:
+            continue
+        if isinstance(s, dict) and s.get("skillType") == "nice-to-have":
+            pref_names.append(name)
+        else:
+            req_names.append(name)
+
+    if req_names:
+        data["stack_required"] = req_names
+    if pref_names:
+        data["stack_preferred"] = pref_names
+
+    return data
+
+
 class SolidJobsSource(JobSource):
     def __init__(self, days_back: int = 7, **_):
         self._days_back = days_back
@@ -91,8 +178,9 @@ class SolidJobsSource(JobSource):
     def _fetch_all_offers(self) -> list[dict]:
         if self._offers_cache is not None:
             return self._offers_cache
+        client = self._client or httpx.Client(headers=_HEADERS, timeout=30, follow_redirects=True)
         try:
-            resp = self._client.get(
+            resp = client.get(
                 _LIST_URL,
                 params={"division": "it", "sortOrder": "default"},
                 headers={"Accept": _LIST_ACCEPT},
@@ -102,6 +190,9 @@ class SolidJobsSource(JobSource):
             self._fetch_error = str(e)
             self._offers_cache = []
             return []
+        finally:
+            if client is not self._client:
+                client.close()
         if resp.status_code != 200:
             self._fetch_error = f"HTTP {resp.status_code}"
             self._offers_cache = []
@@ -119,14 +210,18 @@ class SolidJobsSource(JobSource):
         if len(parts) < 2:
             return None
         offer_id, slug = parts[-2], parts[-1]
+        client = self._client or httpx.Client(headers=_HEADERS, timeout=30, follow_redirects=True)
         try:
-            resp = self._client.get(
+            resp = client.get(
                 _DETAIL_URL.format(id=offer_id, slug=slug),
                 headers={"Accept": _DETAIL_ACCEPT},
             )
         except Exception as e:
             logger.warning(f"solid.jobs detail request failed: {e}")
             return None
+        finally:
+            if client is not self._client:
+                client.close()
         if resp.status_code != 200:
             return None
         try:
@@ -170,7 +265,7 @@ class SolidJobsSource(JobSource):
         for offer in offers:
 
             job_title = offer.get("jobTitle", "")
-            skills = [s.get("name", "") for s in offer.get("requiredSkills") or []]
+            skills = [_skill_name(s) or "" for s in offer.get("requiredSkills") or []]
             if not query_matches(title, job_title, " ".join(skills)):
                 continue
             query_matched += 1
@@ -214,25 +309,17 @@ class SolidJobsSource(JobSource):
             description = self.fetch_description(job_url)
             if description is None:
                 detail_failed += 1
-            source_data = {}
+            source_data = _extract_source_structured_data(offer)
             if "remote" in modes:
-                source_data = {
+                # Do NOT assert remote_regions: ["Poland"] here. An empirical
+                # audit of live remote offers showed listings based in Munich,
+                # Riga, and Dallas (USA) with remotePossible="W całości".
+                # Asserting remote_regions=["Poland"] bypasses the eligibility
+                # gate entirely in extractor/runner.py. Only assert the safe booleans.
+                source_data.update({
                     "remote": True,
                     "remote_available": True,
-                    "remote_regions": ["Poland"],
-                }
-            salary = offer.get("salary") if isinstance(offer.get("salary"), dict) else {}
-            salary_min = salary.get("from") or offer.get("salaryMin")
-            salary_max = salary.get("to") or offer.get("salaryMax")
-            currency = salary.get("currency") or offer.get("salaryCurrency")
-            if salary_min is not None or salary_max is not None:
-                source_data["_salary_disclosed"] = True
-                if salary_min is not None:
-                    source_data["salary_min"] = salary_min
-                if salary_max is not None:
-                    source_data["salary_max"] = salary_max
-                if currency:
-                    source_data["salary_currency"] = currency
+                })
             results.append(RawJob(
                 title=job_title,
                 company=offer.get("companyName", ""),

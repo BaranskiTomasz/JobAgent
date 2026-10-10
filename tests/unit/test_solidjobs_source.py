@@ -133,22 +133,45 @@ class TestSolidJobsSearch:
         offer = _offer(offer_id=5, slug="remote-job", remote="W całości")
         src._client.get.return_value = MagicMock(status_code=200, json=lambda: [offer])
         result = src.search("PHP", "Poland")[0]
-        assert result.source_structured_data == {
-            "remote": True,
-            "remote_available": True,
-            "remote_regions": ["Poland"],
-        }
+        assert result.source_structured_data["remote"] is True
+        assert result.source_structured_data["remote_available"] is True
+        # Do not assert remote_regions=["Poland"]: foreign-based remote listings exist live
+        assert "remote_regions" not in result.source_structured_data
         assert src.search("PHP", "Poland", known_urls={result.url + "/?utm=career"}) == []
 
     def test_native_salary_facts_are_retained(self):
         src = _make_source()
         offer = _offer()
-        offer["salary"] = {"from": 15000, "to": 22000, "currency": "PLN"}
+        offer["salaryRange"] = {
+            "lowerBound": 15000,
+            "upperBound": 22000,
+            "currency": "PLN",
+            "employmentType": "B2B",
+            "salaryPeriod": "Month",
+        }
         src._client.get.return_value = MagicMock(status_code=200, json=lambda: [offer])
         facts = src.search("PHP", "Poland")[0].source_structured_data
         assert facts["salary_min"] == 15000
         assert facts["salary_max"] == 22000
         assert facts["salary_currency"] == "PLN"
+        assert facts["salary_period"] == "monthly"
+        assert facts["_salary_disclosed"] is True
+
+    def test_native_seniority_and_skills_are_extracted(self):
+        src = _make_source()
+        offer = _offer()
+        offer["experienceLevel"] = "Senior"
+        offer["requiredSkills"] = [
+            {"name": "Python", "skillType": "advanced", "skillLevel": "Advanced"},
+            {"name": "Django", "skillType": "expert", "skillLevel": "Expert"},
+            {"name": "Docker", "skillType": "nice-to-have", "skillLevel": "NiceToHave"},
+            {"name": "", "skillType": "basic", "skillLevel": "Basic"},
+        ]
+        src._client.get.return_value = MagicMock(status_code=200, json=lambda: [offer])
+        facts = src.search("PHP", "Poland")[0].source_structured_data
+        assert facts["seniority"] == "senior"
+        assert facts["stack_required"] == ["Python", "Django"]
+        assert facts["stack_preferred"] == ["Docker"]
 
     def test_filters_by_date(self):
         src = _make_source()
@@ -225,3 +248,18 @@ class TestSolidJobsFetchDescription:
         src._client = MagicMock()
         src._client.get.side_effect = Exception("boom")
         assert src.fetch_description("https://solid.jobs/offer/42/foo-bar") is None
+
+    def test_fetch_description_works_standalone_without_enter(self, monkeypatch):
+        mock_resp = MagicMock(
+            status_code=200,
+            json=lambda: {"jobOfferDetails": {"jobDescription": "Standalone text", "candidateProfile": ""}},
+        )
+        mock_client_instance = MagicMock()
+        mock_client_instance.get.return_value = mock_resp
+        monkeypatch.setattr("collector.sources.solidjobs.httpx.Client", MagicMock(return_value=mock_client_instance))
+
+        src = SolidJobsSource()
+        assert src._client is None
+        desc = src.fetch_description("https://solid.jobs/offer/42/foo-bar")
+        assert desc == "Standalone text"
+        mock_client_instance.close.assert_called_once()
