@@ -1,32 +1,13 @@
-"""Unit tests for the justjoin.it scraper, no real HTTP/browser calls made."""
-import json
+"""Unit tests for the justjoin.it public JSON API source."""
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
-from collector.sources.justjoin import JustJoinSource, _parse_rsc_offers, _extract_source_structured_data
-
-
-def _push_script(payload: str) -> str:
-    """Wrap a raw RSC stream fragment in a <script>self.__next_f.push(...)</script> tag,
-    the same way Next.js embeds it in server-rendered HTML."""
-    return f"<script>self.__next_f.push([1,{json.dumps(payload)}])</script>"
-
-
-def _offers_html(offers: list[dict]) -> str:
-    """Build minimal HTML embedding one OFFERS query chunk, matching the real
-    react-query dehydrated-state shape justjoin.it streams via RSC."""
-    state = {
-        "state": {
-            "mutations": [],
-            "queries": [{
-                "queryKey": ["OFFERS", {}],
-                "state": {"data": {"pages": [{"meta": {}, "data": offers}], "pageParams": [None]}},
-            }],
-        },
-        "children": [],
-    }
-    payload = json.dumps(["$", "$L27", None, state])
-    return _push_script(f"1d:{payload}")
+from collector.sources.justjoin import (
+    JustJoinSource,
+    _DETAIL_API_URL,
+    _LISTING_URL,
+    _extract_source_structured_data,
+)
 
 
 def _offer(
@@ -51,292 +32,209 @@ def _offer(
     }
 
 
-class TestParseRscOffers:
-    def test_extracts_offers_from_single_chunk(self):
-        html = _offers_html([_offer()])
-        offers = _parse_rsc_offers(html)
-        assert len(offers) == 1
-        assert offers[0]["title"] == "PHP Developer"
-        assert offers[0]["companyName"] == "Acme"
-
-    def test_extracts_multiple_offers(self):
-        html = _offers_html([
-            _offer(slug="a", guid="a"),
-            _offer(slug="b", guid="b", title="Python Developer"),
-        ])
-        offers = _parse_rsc_offers(html)
-        assert len(offers) == 2
-
-    def test_merges_offers_from_multiple_rsc_chunks_without_duplicates(self):
-        html = _offers_html([_offer(slug="a", guid="a")]) + _offers_html([_offer(slug="b", guid="b"), _offer(slug="a", guid="a")])
-        offers = _parse_rsc_offers(html)
-        assert [offer["slug"] for offer in offers] == ["a", "b"]
-
-    def test_extracts_offers_from_current_direct_rsc_shape(self):
-        payload = json.dumps(["$", {"initial": {"items": [_offer()]}}])
-        html = _push_script(f"89:{payload}")
-
-        offers = _parse_rsc_offers(html)
-
-        assert [offer["slug"] for offer in offers] == ["acme-php-developer"]
-
-    def test_no_offers_query_returns_empty(self):
-        html = _push_script('99:["$","$Lxx",null,{"state":{"queries":[]}}]')
-        assert _parse_rsc_offers(html) == []
-
-    def test_garbage_html_returns_empty_not_raises(self):
-        assert _parse_rsc_offers("<html>not next.js at all</html>") == []
-
-    def test_ignores_unrelated_push_calls(self):
-        # Other RSC rows (component references, translation strings, etc.) share the
-        # same push() wrapper but must not be mistaken for the OFFERS chunk.
-        unrelated = _push_script('12:["$","$L5",null,{"messages":{"header":"Filters"}}]')
-        html = unrelated + _offers_html([_offer()])
-        offers = _parse_rsc_offers(html)
-        assert len(offers) == 1
+def _response(data, *, next_cursor=None, status_code=200):
+    response = MagicMock(status_code=status_code)
+    response.json.return_value = {"data": data, "meta": {"next": {"cursor": next_cursor}}}
+    return response
 
 
-def _make_source() -> JustJoinSource:
-    src = JustJoinSource()
-    src._client = MagicMock()
-    src.fetch_description = MagicMock(return_value="Full description text")
-    return src
+def _make_source(*, catalog=False) -> JustJoinSource:
+    source = JustJoinSource(catalog=catalog)
+    source._client = MagicMock()
+    return source
+
+
+def _api_side_effect(pages, details=None, failure_at=None):
+    details = details or {}
+
+    def get(url, params=None):
+        if url == _LISTING_URL:
+            cursor = params["from"]
+            if cursor == failure_at:
+                raise RuntimeError("listing network error")
+            return pages[cursor]
+        slug = url.rsplit("/", 1)[-1]
+        response = MagicMock(status_code=200)
+        response.json.return_value = details.get(slug, {"body": "<p>Detail text</p>"})
+        return response
+
+    return get
 
 
 class TestJustJoinSourceSearch:
     def test_non_poland_location_returns_empty_without_request(self):
-        src = _make_source()
-        results = src.search("PHP Developer", "Germany")
-        assert results == []
-        src._client.get.assert_not_called()
+        source = _make_source()
+        assert source.search("PHP Developer", "Germany") == []
+        source._client.get.assert_not_called()
+        assert source.last_search_diagnostics["source_status"] == "skipped"
 
-    def test_poland_location_triggers_search(self):
-        src = _make_source()
-        src._client.get.return_value = MagicMock(status_code=200, text=_offers_html([_offer()]))
-        results = src.search("PHP Developer", "Poland")
-        assert len(results) == 1
-        assert results[0].company == "Acme"
-        assert results[0].source == "justjoin"
-
-    def test_polish_spelling_also_matches(self):
-        src = _make_source()
-        src._client.get.return_value = MagicMock(status_code=200, text=_offers_html([_offer()]))
-        results = src.search("PHP Developer", "Polska")
-        assert len(results) == 1
-
-    def test_url_built_from_slug(self):
-        src = _make_source()
-        src._client.get.return_value = MagicMock(status_code=200, text=_offers_html([_offer(slug="acme-php-dev")]))
-        results = src.search("PHP Developer", "Poland")
-        assert results[0].url == "https://justjoin.it/job-offer/acme-php-dev"
-
-    def test_description_fetched_inline(self):
-        src = _make_source()
-        src._client.get.return_value = MagicMock(status_code=200, text=_offers_html([_offer()]))
-        results = src.search("PHP Developer", "Poland")
-        assert results[0].description == "Full description text"
-        src.fetch_description.assert_called_once()
-
-    def test_skips_known_urls(self):
-        src = _make_source()
-        src._client.get.return_value = MagicMock(status_code=200, text=_offers_html([_offer(slug="dup")]))
-        known = {"https://justjoin.it/job-offer/dup"}
-        results = src.search("PHP Developer", "Poland", known_urls=known)
-        assert results == []
-        src.fetch_description.assert_not_called()
-
-    def test_filters_by_date(self):
-        src = _make_source()
-        fresh = _offer(slug="fresh", days_ago=1)
-        old = _offer(slug="old", days_ago=30)
-        src._client.get.return_value = MagicMock(status_code=200, text=_offers_html([fresh, old]))
-        results = src.search("PHP Developer", "Poland", days_back=7)
-        assert len(results) == 1
-        assert "fresh" in results[0].url
-
-    def test_respects_max_results(self):
-        src = _make_source()
-        offers = [_offer(slug=f"job-{i}", guid=f"job-{i}") for i in range(5)]
-        src._client.get.return_value = MagicMock(status_code=200, text=_offers_html(offers))
-        results = src.search("PHP Developer", "Poland", max_results=2)
-        assert len(results) == 2
-
-    def test_search_does_not_restrict_to_remote_workplace(self):
-        # Regression: justjoin.it is routed for hybrid/onsite Polish-city candidates
-        # too (collector/runner.py's _POLAND_ONLY_SOURCES), so a hardcoded
-        # workplace=remote param silently returned nothing relevant for them.
-        src = _make_source()
-        src._client.get.return_value = MagicMock(status_code=200, text=_offers_html([_offer()]))
-        src.search("PHP Developer", "Poland")
-        _, kwargs = src._client.get.call_args
-        assert "workplace" not in kwargs.get("params", {})
-
-    def test_remote_offer_location_labeled_remote(self):
-        src = _make_source()
-        src._client.get.return_value = MagicMock(
-            status_code=200, text=_offers_html([_offer(city="Warszawa", workplace_type="remote")])
+    def test_paginates_to_completion_and_uses_json_detail_body(self):
+        source = _make_source()
+        first_page = [_offer(slug=f"noise-{index}", title="Java Developer", guid=f"noise-{index}") for index in range(99)]
+        first_page.append(_offer(slug="first", guid="first"))
+        pages = {
+            0: _response(first_page, next_cursor=100),
+            100: _response([_offer(slug="second", guid="second")]),
+        }
+        source._client.get.side_effect = _api_side_effect(
+            pages, {"first": {"body": "<p>First <strong>description</strong></p>"}, "second": {"body": "<div>Second description</div>"}}
         )
-        results = src.search("PHP Developer", "Poland")
-        assert results[0].location == "Warszawa, Poland (Remote)"
 
-    def test_hybrid_offer_location_labeled_hybrid(self):
-        src = _make_source()
-        src._client.get.return_value = MagicMock(
-            status_code=200, text=_offers_html([_offer(city="Krakow", workplace_type="hybrid")])
+        results = source.search("PHP Developer", "Poland")
+
+        assert [result.url.rsplit("/", 1)[-1] for result in results] == ["first", "second"]
+        assert results[0].description == "First description"
+        listing_calls = [call for call in source._client.get.call_args_list if call.args[0] == _LISTING_URL]
+        assert [call.kwargs["params"]["from"] for call in listing_calls] == [0, 100]
+        assert source.last_search_diagnostics["pages_fetched"] == 2
+
+    def test_catalog_filters_hybrid_and_office_before_detail_request(self):
+        source = _make_source(catalog=True)
+        offers = [_offer(slug="remote", guid="remote"), _offer(slug="hybrid", guid="hybrid", workplace_type="hybrid"), _offer(slug="office", guid="office", workplace_type="office")]
+        source._client.get.side_effect = _api_side_effect({0: _response(offers)})
+
+        results = source.search("PHP Developer", "Poland")
+
+        assert [result.url.rsplit("/", 1)[-1] for result in results] == ["remote"]
+        detail_calls = [call.args[0] for call in source._client.get.call_args_list if call.args[0] != _LISTING_URL]
+        assert detail_calls == [_DETAIL_API_URL.format(slug="remote")]
+
+    def test_non_catalog_keeps_hybrid_and_office(self):
+        source = _make_source(catalog=False)
+        offers = [_offer(slug="hybrid", guid="hybrid", workplace_type="hybrid"), _offer(slug="office", guid="office", workplace_type="office")]
+        source._client.get.side_effect = _api_side_effect({0: _response(offers)})
+
+        results = source.search("PHP Developer", "Poland")
+
+        assert [result.url.rsplit("/", 1)[-1] for result in results] == ["hybrid", "office"]
+        assert results[0].location == "Warszawa, Poland (Hybrid)"
+        assert results[1].location == "Warszawa, Poland"
+
+    def test_date_and_known_url_filters_skip_detail_requests(self):
+        source = _make_source()
+        offers = [_offer(slug="fresh", guid="fresh"), _offer(slug="old", guid="old", days_ago=30), _offer(slug="known", guid="known")]
+        source._client.get.side_effect = _api_side_effect({0: _response(offers)})
+
+        results = source.search(
+            "PHP Developer", "Poland", days_back=7,
+            known_urls={"https://JUSTJOIN.IT/job-offer/known/?tracking=yes"},
         )
-        results = src.search("PHP Developer", "Poland")
-        assert results[0].location == "Krakow, Poland (Hybrid)"
 
-    def test_office_offer_location_has_no_suffix(self):
-        src = _make_source()
-        src._client.get.return_value = MagicMock(
-            status_code=200, text=_offers_html([_offer(city="Gdansk", workplace_type="office")])
-        )
-        results = src.search("PHP Developer", "Poland")
-        assert results[0].location == "Gdansk, Poland"
+        assert [result.url.rsplit("/", 1)[-1] for result in results] == ["fresh"]
+        detail_calls = [call.args[0] for call in source._client.get.call_args_list if call.args[0] != _LISTING_URL]
+        assert detail_calls == [_DETAIL_API_URL.format(slug="fresh")]
+        assert source.last_search_diagnostics["known_url_filtered"] == 1
 
-    def test_non_200_response_returns_empty(self):
-        src = _make_source()
-        src._client.get.return_value = MagicMock(status_code=500, text="")
-        results = src.search("PHP Developer", "Poland")
-        assert results == []
-
-    def test_request_exception_returns_empty(self):
-        src = _make_source()
-        src._client.get.side_effect = Exception("network error")
-        results = src.search("PHP Developer", "Poland")
-        assert results == []
-        assert src.last_search_diagnostics["source_status"] == "error"
-
-    def test_empty_offers_returns_empty(self):
-        src = _make_source()
-        src._client.get.return_value = MagicMock(status_code=200, text="<html></html>")
-        results = src.search("PHP Developer", "Poland")
-        assert results == []
-        assert src.last_search_diagnostics["upstream_found"] == 0
-
-    def test_local_query_guard_drops_upstream_keyword_noise(self):
-        src = _make_source()
-        src._client.get.return_value = MagicMock(
-            status_code=200, text=_offers_html([_offer(title="Java Developer")])
-        )
-        assert src.search("PHP Developer", "Poland") == []
-
-    def test_known_url_matching_is_canonical_and_remote_fact_is_native(self):
-        src = _make_source()
-        offer = _offer(slug="remote-job", workplace_type="remote")
-        src._client.get.return_value = MagicMock(status_code=200, text=_offers_html([offer]))
-        result = src.search("PHP Developer", "Poland")
-        assert result[0].source_structured_data["remote_available"] is True
-        assert result[0].source_structured_data["remote_regions"] == ["Poland"]
-        assert src.search("PHP Developer", "Poland", known_urls={"https://justjoin.it/job-offer/remote-job/"}) == []
-
-    def test_source_structured_data_captures_salary_and_skills(self):
-        # Regression: justjoin.it discloses salary/skills as structured API
-        # fields (verified live against the real site), Haiku shouldn't have
-        # to re-guess them from the description text later.
-        offer = _offer()
-        offer["experienceLevel"] = "senior"
-        offer["employmentTypes"] = [
-            {"from": 15000, "to": 25000, "currency": "PLN", "currencySource": "original", "unit": "month"},
-            {"from": 3500, "to": 5800, "currency": "EUR", "currencySource": "conversion", "unit": "month"},
+    def test_detail_is_requested_only_after_every_listing_filter(self):
+        source = _make_source(catalog=True)
+        offers = [
+            _offer(slug="match", guid="match"),
+            _offer(slug="wrong-title", guid="wrong-title", title="Java Developer"),
+            _offer(slug="old", guid="old", days_ago=20),
+            _offer(slug="office", guid="office", workplace_type="office"),
+            _offer(slug="known", guid="known"),
         ]
-        offer["requiredSkills"] = ["PHP", "Symfony"]
-        offer["niceToHaveSkills"] = ["Docker"]
-        src = _make_source()
-        src._client.get.return_value = MagicMock(status_code=200, text=_offers_html([offer]))
-        results = src.search("PHP Developer", "Poland")
-        ssd = results[0].source_structured_data
-        assert ssd["seniority"] == "senior"
-        assert ssd["salary_min"] == 15000
-        assert ssd["salary_max"] == 25000
-        assert ssd["salary_currency"] == "PLN"
-        assert ssd["salary_period"] == "monthly"
-        assert ssd["stack_required"] == ["PHP", "Symfony"]
-        assert ssd["stack_preferred"] == ["Docker"]
+        source._client.get.side_effect = _api_side_effect({0: _response(offers)})
 
-    def test_posted_at_captures_the_publication_date(self):
-        # publishedAt was already parsed for the days_back cutoff, then
-        # discarded, RawJob.posted_at carries it through instead.
-        src = _make_source()
-        src._client.get.return_value = MagicMock(status_code=200, text=_offers_html([_offer(days_ago=3)]))
-        results = src.search("PHP Developer", "Poland")
-        assert results[0].posted_at is not None
-        posted = datetime.fromisoformat(results[0].posted_at)
-        assert (datetime.now(timezone.utc) - posted).days == 3
+        results = source.search("PHP Developer", "Poland", known_urls={"https://justjoin.it/job-offer/known"})
+
+        assert len(results) == 1
+        detail_calls = [call for call in source._client.get.call_args_list if call.args[0] != _LISTING_URL]
+        assert len(detail_calls) == 1
+        assert detail_calls[0].args[0] == _DETAIL_API_URL.format(slug="match")
+
+    def test_partial_pagination_returns_prior_candidates_and_diagnostics(self):
+        source = _make_source()
+        page = [_offer(slug=f"noise-{index}", title="Java Developer", guid=f"noise-{index}") for index in range(99)]
+        page.append(_offer(slug="first", guid="first"))
+        source._client.get.side_effect = _api_side_effect({0: _response(page, next_cursor=100)}, failure_at=100)
+
+        results = source.search("PHP Developer", "Poland")
+
+        assert [result.url.rsplit("/", 1)[-1] for result in results] == ["first"]
+        assert source.last_search_diagnostics["source_status"] == "partial"
+        assert source.last_search_diagnostics["source_error"]
+        assert source.last_search_diagnostics["pages_fetched"] == 1
+
+    def test_posted_at_is_preserved_without_inferring_remote_eligibility(self):
+        source = _make_source()
+        source._client.get.side_effect = _api_side_effect({0: _response([_offer(days_ago=3)])})
+        result = source.search("PHP Developer", "Poland")[0]
+
+        assert result.posted_at is not None
+        assert (datetime.now(timezone.utc) - datetime.fromisoformat(result.posted_at)).days == 3
+        assert "remote_regions" not in result.source_structured_data
+
+    def test_remote_offer_discloses_remote_fact_without_claiming_a_country(self):
+        # workplaceType=="remote" is a disclosed fact worth keeping natively
+        # (saves Haiku re-deriving it from the description), but NOT evidence
+        # of which country the role is open to - a real justjoin.it listing
+        # with workplaceType=="remote" had city "Stockholm City" (verified
+        # live). extractor/runner.py's eligibility gate treats any PL/BG name
+        # inside remote_regions as outright eligible=True, bypassing the real
+        # evidence check - so remote_regions must stay absent even though
+        # remote/remote_available are safe to assert.
+        source = _make_source()
+        source._client.get.side_effect = _api_side_effect(
+            {0: _response([_offer(workplace_type="remote")])}
+        )
+        result = source.search("PHP Developer", "Poland")[0]
+
+        assert result.source_structured_data["remote"] is True
+        assert result.source_structured_data["remote_available"] is True
+        assert "remote_regions" not in result.source_structured_data
+
+    def test_hybrid_and_office_offers_do_not_disclose_remote_fact(self):
+        source = _make_source(catalog=False)
+        offers = [
+            _offer(slug="hybrid", guid="hybrid", workplace_type="hybrid"),
+            _offer(slug="office", guid="office", workplace_type="office"),
+        ]
+        source._client.get.side_effect = _api_side_effect({0: _response(offers)})
+
+        results = source.search("PHP Developer", "Poland")
+
+        for result in results:
+            assert "remote" not in result.source_structured_data
+            assert "remote_available" not in result.source_structured_data
+
+    def test_fetch_description_overrides_base_default_for_runners_backfill_path(self):
+        # collector/runner.py's _fetch_one() backfill retries a job whose
+        # description came back empty from search() by calling
+        # source.fetch_description(url) directly, by URL - not through
+        # search(). JobSource's own default is a no-op returning None, so
+        # this source must override it, or every justjoin.it backfill retry
+        # silently does nothing forever.
+        source = _make_source()
+        source._client.get.return_value = MagicMock(
+            status_code=200, json=lambda: {"body": "<p>Backfilled description</p>"},
+        )
+
+        description = source.fetch_description("https://justjoin.it/job-offer/some-slug/")
+
+        assert description == "Backfilled description"
+        source._client.get.assert_called_once_with(_DETAIL_API_URL.format(slug="some-slug"))
 
 
 class TestExtractSourceStructuredData:
-    def test_extracts_salary_from_original_currency_entry(self):
-        offer = {
+    def test_extracts_salary_and_skills(self):
+        data = _extract_source_structured_data({
             "experienceLevel": "senior",
             "employmentTypes": [
                 {"from": 15000, "to": 25000, "currency": "PLN", "currencySource": "original", "unit": "month"},
                 {"from": 3500, "to": 5800, "currency": "EUR", "currencySource": "conversion", "unit": "month"},
             ],
-        }
-        data = _extract_source_structured_data(offer)
+            "requiredSkills": [{"name": "PHP"}],
+            "niceToHaveSkills": [{"name": "Docker"}],
+        })
+        assert data["seniority"] == "senior"
         assert data["salary_min"] == 15000
+        assert data["salary_max"] == 25000
         assert data["salary_currency"] == "PLN"
+        assert data["stack_required"] == [{"name": "PHP"}]
 
-    def test_unknown_seniority_value_skipped(self):
-        # justjoin.it's experienceLevel vocabulary doesn't necessarily line up
-        # 1:1 with extractor/runner.py's enum, never write a value outside it.
-        data = _extract_source_structured_data({"experienceLevel": "c-level"})
-        assert "seniority" not in data
-
-    def test_unsupported_currency_skips_salary_entirely(self):
-        offer = {"employmentTypes": [
-            {"from": 3200, "to": 5400, "currency": "CHF", "currencySource": "original", "unit": "month"},
-        ]}
-        assert "salary_min" not in _extract_source_structured_data(offer)
-
-    def test_unknown_unit_skips_salary_entirely(self):
-        offer = {"employmentTypes": [
-            {"from": 15000, "to": 25000, "currency": "PLN", "currencySource": "original", "unit": "sprint"},
-        ]}
-        assert "salary_min" not in _extract_source_structured_data(offer)
-
-    def test_no_employment_types_returns_no_salary(self):
-        assert _extract_source_structured_data({}) == {"_salary_disclosed": False}
-
-    def test_empty_skills_omitted_not_written_as_empty_list(self):
-        offer = {"requiredSkills": [], "niceToHaveSkills": []}
-        data = _extract_source_structured_data(offer)
-        assert "stack_required" not in data
-        assert "stack_preferred" not in data
-
-
-class TestFetchDescription:
-    def test_uses_editor_paragraph_when_present(self):
-        src = JustJoinSource()
-        src._page = MagicMock()
-        src._page.eval_on_selector_all.return_value = ["Para one", "Para two"]
-        desc = src.fetch_description("https://justjoin.it/job-offer/foo")
-        assert desc == "Para one\nPara two"
-
-    def test_falls_back_to_job_description_heading_when_editor_paragraph_empty(self):
-        # A real posting was found live with no .editor-paragraph markup at all,
-        # description rendered as plain text under a "Job description" heading instead.
-        from playwright.sync_api import TimeoutError as PlaywrightTimeout
-        src = JustJoinSource()
-        src._page = MagicMock()
-        src._page.wait_for_selector.side_effect = PlaywrightTimeout("not found")
-        src._page.evaluate.return_value = "Full plain-text description"
-        desc = src.fetch_description("https://justjoin.it/job-offer/foo")
-        assert desc == "Full plain-text description"
-
-    def test_returns_none_when_both_strategies_find_nothing(self):
-        from playwright.sync_api import TimeoutError as PlaywrightTimeout
-        src = JustJoinSource()
-        src._page = MagicMock()
-        src._page.wait_for_selector.side_effect = PlaywrightTimeout("not found")
-        src._page.evaluate.return_value = ""
-        assert src.fetch_description("https://justjoin.it/job-offer/foo") is None
-
-    def test_returns_none_on_goto_timeout(self):
-        from playwright.sync_api import TimeoutError as PlaywrightTimeout
-        src = JustJoinSource()
-        src._page = MagicMock()
-        src._page.goto.side_effect = PlaywrightTimeout("timeout")
-        assert src.fetch_description("https://justjoin.it/job-offer/foo") is None
+    def test_skips_unknown_salary_or_seniority_values(self):
+        assert _extract_source_structured_data({
+            "experienceLevel": "c-level",
+            "employmentTypes": [{"from": 1, "to": 2, "currency": "CHF", "unit": "sprint"}],
+        }) == {"_salary_disclosed": False}
