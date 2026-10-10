@@ -215,6 +215,42 @@ class TestJustJoinSourceSearch:
         assert description == "Backfilled description"
         source._client.get.assert_called_once_with(_DETAIL_API_URL.format(slug="some-slug"))
 
+    def test_listing_pagination_is_cached_across_queries_in_one_session(self):
+        # collector/runner.py calls search() once per catalog query (18 for
+        # a full catalog run) within one `with source:` session - a live run
+        # against the real API timed out at 600s before this cache existed,
+        # because every query re-paginated the same ~10k-listing set from
+        # scratch. Each search() call below is a different query/title, same
+        # session: the listing endpoint must be hit only once in total.
+        source = _make_source()
+        source._client.get.side_effect = _api_side_effect(
+            {0: _response([_offer(slug="a", guid="a", title="PHP Developer")])}
+        )
+
+        source.search("PHP Developer", "Poland")
+        source.search("Python Developer", "Poland")
+        source.search("Java Developer", "Poland")
+
+        listing_calls = [c for c in source._client.get.call_args_list if c.args[0] == _LISTING_URL]
+        assert len(listing_calls) == 1
+
+    def test_listing_cache_is_cleared_on_a_new_session(self):
+        source = _make_source()
+        source._client.get.side_effect = _api_side_effect(
+            {0: _response([_offer(slug="a", guid="a")])}
+        )
+        source.search("PHP Developer", "Poland")
+        source.__exit__()
+        source._client = MagicMock()
+        source._client.get.side_effect = _api_side_effect(
+            {0: _response([_offer(slug="b", guid="b")])}
+        )
+
+        source.search("PHP Developer", "Poland")
+
+        listing_calls = [c for c in source._client.get.call_args_list if c.args[0] == _LISTING_URL]
+        assert len(listing_calls) == 1
+
 
 class TestExtractSourceStructuredData:
     def test_extracts_salary_and_skills(self):

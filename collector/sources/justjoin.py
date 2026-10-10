@@ -72,6 +72,7 @@ class JustJoinSource(JobSource):
         self._days_back = days_back
         self._catalog = catalog
         self._client: httpx.Client | None = None
+        self._listings_cache: tuple[list[dict], int, str | None] | None = None
         self.last_search_diagnostics = {}
 
     @property
@@ -86,6 +87,7 @@ class JustJoinSource(JobSource):
         if self._client:
             self._client.close()
         self._client = None
+        self._listings_cache = None
         self.last_search_diagnostics = {}
 
     @staticmethod
@@ -96,6 +98,19 @@ class JustJoinSource(JobSource):
         )
 
     def _fetch_listings(self) -> tuple[list[dict], int, str | None]:
+        # collector/runner.py calls search() once per catalog query (18 for
+        # a full catalog run) within one `with source:` session - the
+        # listing set doesn't depend on the query, so without this cache
+        # every query would re-paginate the ~10k-listing API from scratch.
+        # A live run with the full query list timed out at 600s before this
+        # cache was added (confirmed: 18x repagination of the same data).
+        if self._listings_cache is not None:
+            return self._listings_cache
+        result = self._fetch_listings_uncached()
+        self._listings_cache = result
+        return result
+
+    def _fetch_listings_uncached(self) -> tuple[list[dict], int, str | None]:
         offers: list[dict] = []
         cursor = 0
         pages_fetched = 0
