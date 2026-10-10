@@ -9,10 +9,29 @@ JSON in a `<script id="serverApp-state">` tag, Angular's TransferState mechanism
 JSON text has a handful of HTML entities escaped (`&q;`, `&a;`, `&l;`, `&g;`) that must
 be un-escaped before parsing. Keys are hashed or literal-request-path strings (Angular's
 HTTP TransferState cache is keyed by request identity, not a fixed name), rather than
-guess the exact key, we scan all top-level values for the shape we need.
+guess the exact key, we scan all top-level values for the shape we need. Verified live
+against the real site again (October 2026): the mechanism and shape still hold.
 
 Search results don't include the full description (only tags/salary/seniority), so a
-second GET to the job's detail page is made per new posting.
+second GET to the job's detail page is made per new posting. The job's own detail page
+("details") only adds the long-form description HTML - no additional structured fields
+(confirmed live) - so seniority/salary/required-tech are all read off the search-result
+posting object, same as the salary handling below.
+
+The listing endpoint itself server-side filters by the search keyword (unlike
+justjoin.it/solid.jobs, which return their whole catalog regardless of query and need a
+session-level cache to avoid re-fetching per query) - verified live: different keywords
+return different posting sets - so no such cache applies here.
+
+No `remote_regions` fact is asserted for "Remote"-tagged postings: a live sample of 240
+postings across 12 keyword searches found 112 remote-tagged listings, and while the
+overwhelming majority are Poland-based, at least one genuine counterexample exists (a
+"PHP Software Engineer (Hungarian speaking)" posting whose `places` are all Hungarian
+provinces and whose own `regions` field is `["hu"]`, not `["pl"]`). Asserting
+`remote_regions: ["Poland"]` would have made extractor/runner.py's eligibility gate
+treat that Hungary-only listing as Poland-eligible. Only the safe `remote`/
+`remote_available` booleans are asserted; eligibility is left to the real evidence
+check against the description text.
 """
 import json
 import logging
@@ -70,14 +89,58 @@ def _find_description(state: dict) -> str | None:
 
 _KNOWN_SALARY_CURRENCIES = {"PLN", "EUR", "USD", "GBP"}
 
+# extractor/runner.py's seniority enum is junior/mid/senior/lead/director.
+# NoFluffJobs' own values (verified live, always a single-element list):
+# Trainee, Junior, Mid, Senior, Lead, Expert. "Trainee" and "Expert" have no
+# confident mapping onto the enum (Trainee sits below junior, Expert isn't a
+# declared level at all) - skip them rather than guess.
+_SENIORITY_MAP = {
+    "junior": "junior",
+    "mid": "mid",
+    "senior": "senior",
+    "lead": "lead",
+}
+
+
+def _tile_value(tile) -> str | None:
+    if isinstance(tile, dict):
+        value = tile.get("value")
+        return str(value) if value else None
+    if tile:
+        return str(tile)
+    return None
+
+
+def _required_technologies(posting: dict) -> list[str]:
+    """Each posting's `tiles.values` always carries 1-4 "requirement"-typed
+    entries (verified live: 0/240 postings sampled had none) - the same chips
+    shown as tags on the listing card. NoFluffJobs doesn't disclose a separate
+    nice-to-have list anywhere in the search-result payload, so everything
+    here is "required" by default."""
+    tiles = (posting.get("tiles") or {}).get("values") or []
+    names = [_tile_value(t) for t in tiles if isinstance(t, dict) and t.get("type") == "requirement"]
+    return [name for name in names if name]
+
 
 def _extract_source_structured_data(posting: dict, description: str | None = None) -> dict:
-    """NoFluffJobs' own search-result payload already discloses salary as a
-    structured field (verified live against the real site), not prose, no
-    reason to make Haiku re-guess it from the description later. NoFluffJobs
-    payload also states the period explicitly, so it remains authoritative
-    when the shortened detail description omits the salary line."""
+    """NoFluffJobs' own search-result payload already discloses salary,
+    seniority and required technologies as structured fields (verified live
+    against the real site), not prose, no reason to make Haiku re-guess them
+    from the description later. NoFluffJobs payload also states the salary
+    period explicitly, so it remains authoritative when the shortened detail
+    description omits the salary line."""
     data: dict = {"_salary_disclosed": False}
+
+    seniority_values = posting.get("seniority") or []
+    if isinstance(seniority_values, list) and seniority_values:
+        mapped = _SENIORITY_MAP.get(str(seniority_values[0]).strip().lower())
+        if mapped:
+            data["seniority"] = mapped
+
+    required = _required_technologies(posting)
+    if required:
+        data["stack_required"] = required
+
     salary = posting.get("salary") or {}
     salary_from, salary_to, currency = salary.get("from"), salary.get("to"), salary.get("currency")
     if salary_from and salary_to and currency in _KNOWN_SALARY_CURRENCIES:
@@ -122,11 +185,19 @@ class NoFluffJobsSource(JobSource):
         return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), "", ""))
 
     def fetch_description(self, url: str) -> str | None:
+        # collector/runner.py's generic backfill retry (_fetch_one) calls this
+        # directly by URL, outside of search()'s own loop, without having
+        # entered this source first in some paths - fall back to a standalone
+        # client rather than silently no-op on self._client being None.
+        client = self._client or httpx.Client(headers=_HEADERS, timeout=30, follow_redirects=True)
         try:
-            resp = self._client.get(url)
+            resp = client.get(url)
         except Exception as e:
             logger.warning(f"NoFluffJobs detail fetch failed: {e}")
             return None
+        finally:
+            if client is not self._client:
+                client.close()
         if resp.status_code != 200:
             return None
         state = _parse_server_state(resp.text)
@@ -202,8 +273,16 @@ class NoFluffJobsSource(JobSource):
             slug = posting.get("url")
             if not slug:
                 continue
-            technologies = posting.get("technology") or posting.get("technologies") or posting.get("tags") or []
-            if not query_matches(title, posting.get("title") or "", " ".join(str(tag) for tag in technologies)):
+            # `technology` is a single string (e.g. "Python"), not a list
+            # (verified live: always str or None across 240 sampled
+            # postings) - iterating it character-by-character silently
+            # mangled the match text; the "requirement" tiles carry the
+            # fuller, always-present tag list instead.
+            technologies = _required_technologies(posting)
+            technology = posting.get("technology")
+            if technology:
+                technologies = [str(technology), *technologies]
+            if not query_matches(title, posting.get("title") or "", " ".join(technologies)):
                 continue
             query_matched += 1
 
@@ -247,10 +326,14 @@ class NoFluffJobsSource(JobSource):
                 detail_failed += 1
             source_data = _extract_source_structured_data(posting, description)
             if "remote" in modes:
+                # Do NOT assert remote_regions=["Poland"] here - see the
+                # module docstring: a live sample found a genuine non-Poland
+                # "Remote"-tagged listing (Hungary). Only the safe booleans
+                # are asserted; real eligibility is left to the description
+                # text evidence check.
                 source_data.update({
                     "remote": True,
                     "remote_available": True,
-                    "remote_regions": ["Poland"],
                 })
             results.append(RawJob(
                 title=posting.get("title", ""),

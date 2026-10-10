@@ -72,11 +72,20 @@ def test_salary_period_defaults_to_monthly_without_hourly_unit():
     assert data["salary_period"] == "monthly"
 
 
-def _posting(slug="php-developer-remote", title="PHP Developer", company="Acme", posting_id="abc-1", days_ago=0, places=None):
+def _posting(
+    slug="php-developer-remote", title="PHP Developer", company="Acme", posting_id="abc-1",
+    days_ago=0, places=None, seniority=None, tiles=None, technology=None,
+):
     posted_ms = int((datetime.now(timezone.utc) - timedelta(days=days_ago)).timestamp() * 1000)
     posting = {"id": posting_id, "name": company, "title": title, "url": slug, "posted": posted_ms}
     if places is not None:
         posting["location"] = {"places": places}
+    if seniority is not None:
+        posting["seniority"] = seniority
+    if tiles is not None:
+        posting["tiles"] = {"values": tiles}
+    if technology is not None:
+        posting["technology"] = technology
     return posting
 
 
@@ -139,9 +148,33 @@ class TestNoFluffJobsSearch:
         src._client.get.return_value = MagicMock(status_code=200, text=_search_html([posting]))
         result = src.search("PHP", "Poland")[0]
         assert result.source_id == "https://nofluffjobs.com/pl/job/remote-job"
+        assert result.source_structured_data["remote"] is True
         assert result.source_structured_data["remote_available"] is True
-        assert result.source_structured_data["remote_regions"] == ["Poland"]
         assert src.search("PHP", "Poland", known_urls={result.url + "/?utm=career"}) == []
+
+    def test_remote_regions_is_never_asserted(self):
+        # Regression: extractor/runner.py's eligibility gate treats any PL/BG
+        # country name found inside source_structured_data["remote_regions"]
+        # as outright eligible=True, bypassing the real evidence check. A
+        # live sample of 240 NoFluffJobs postings found a genuine Hungary-
+        # based "Remote"-tagged listing, so remote_regions must stay absent
+        # even though every synthetic fixture here is Poland-labeled.
+        src = _make_source()
+        posting = _posting(places=[{"city": "Remote"}])
+        src._client.get.return_value = MagicMock(status_code=200, text=_search_html([posting]))
+        result = src.search("PHP", "Poland")[0]
+        assert "remote_regions" not in result.source_structured_data
+
+    def test_technology_string_is_not_split_into_characters(self):
+        # Regression: `technology` is a single string (e.g. "Golang"), not a
+        # list. Iterating it char-by-char used to turn it into "G o l a n g"
+        # for query matching, which breaks the word-boundary phrase match a
+        # real Golang-only (title doesn't say "Golang") posting needs.
+        src = _make_source()
+        posting = _posting(title="Backend Developer", technology="Golang")
+        src._client.get.return_value = MagicMock(status_code=200, text=_search_html([posting]))
+        results = src.search("Golang", "Poland")
+        assert len(results) == 1
 
     def test_local_query_guard_drops_upstream_noise(self):
         src = _make_source()
@@ -243,6 +276,18 @@ class TestNoFluffJobsSearch:
         assert ssd["salary_currency"] == "PLN"
         assert ssd["salary_period"] == "monthly"
 
+    def test_source_structured_data_captures_native_seniority_and_stack(self):
+        posting = _posting(
+            seniority=["Senior"],
+            tiles=[{"value": "Python", "type": "requirement"}, {"value": "GCP", "type": "requirement"}],
+        )
+        src = _make_source()
+        src._client.get.return_value = MagicMock(status_code=200, text=_search_html([posting]))
+        results = src.search("PHP", "Poland")
+        ssd = results[0].source_structured_data
+        assert ssd["seniority"] == "senior"
+        assert ssd["stack_required"] == ["Python", "GCP"]
+
     def test_posted_at_captures_the_posted_timestamp(self):
         # "posted" was already parsed for the days_back cutoff, then discarded,
         # RawJob.posted_at carries it through instead.
@@ -271,6 +316,36 @@ class TestExtractSourceStructuredData:
         data = _extract_source_structured_data({"salary": {"from": 1000, "to": 2000, "currency": "JPY"}})
         assert data == {"_salary_disclosed": False}
 
+    def test_native_seniority_is_mapped_onto_the_schema_enum(self):
+        data = _extract_source_structured_data({"seniority": ["Senior"]})
+        assert data["seniority"] == "senior"
+
+    def test_unmapped_seniority_values_are_skipped(self):
+        # "Trainee" and "Expert" are real native values (verified live) with
+        # no confident mapping onto extractor/runner.py's junior/mid/senior/
+        # lead/director enum - never guess, just omit the field.
+        assert "seniority" not in _extract_source_structured_data({"seniority": ["Trainee"]})
+        assert "seniority" not in _extract_source_structured_data({"seniority": ["Expert"]})
+
+    def test_missing_seniority_is_skipped(self):
+        assert "seniority" not in _extract_source_structured_data({})
+
+    def test_required_technologies_captured_as_plain_strings(self):
+        posting = {
+            "tiles": {"values": [
+                {"value": "backend", "type": "category"},
+                {"value": "Python", "type": "requirement"},
+                {"value": "Linux", "type": "requirement"},
+            ]},
+        }
+        data = _extract_source_structured_data(posting)
+        assert data["stack_required"] == ["Python", "Linux"]
+        assert "stack_preferred" not in data
+
+    def test_no_requirement_tiles_omits_stack_required(self):
+        assert "stack_required" not in _extract_source_structured_data({"tiles": {"values": []}})
+        assert "stack_required" not in _extract_source_structured_data({})
+
 
 class TestNoFluffJobsFetchDescription:
     def test_returns_none_on_non_200(self):
@@ -285,3 +360,17 @@ class TestNoFluffJobsFetchDescription:
         src.fetch_description = NoFluffJobsSource.fetch_description.__get__(src)
         src._client.get.side_effect = Exception("boom")
         assert src.fetch_description("https://nofluffjobs.com/pl/job/foo") is None
+
+    def test_works_standalone_without_enter(self, monkeypatch):
+        # collector/runner.py's generic backfill retry calls fetch_description(url)
+        # directly, without necessarily having entered this source first.
+        mock_resp = MagicMock(status_code=200, text=_state_html('{&q;STORE_KEY&q;:{&q;details&q;:{&q;description&q;:&q;Hi&q;}}}'))
+        mock_client_instance = MagicMock()
+        mock_client_instance.get.return_value = mock_resp
+        monkeypatch.setattr("collector.sources.nofluffjobs.httpx.Client", MagicMock(return_value=mock_client_instance))
+
+        src = NoFluffJobsSource()
+        assert src._client is None
+        desc = src.fetch_description("https://nofluffjobs.com/pl/job/foo")
+        assert desc == "Hi"
+        mock_client_instance.close.assert_called_once()
