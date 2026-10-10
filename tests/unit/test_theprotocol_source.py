@@ -3,7 +3,16 @@ import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
-from collector.sources.theprotocol import TheProtocolSource, _read_next_data, _section_text, _salary_text
+from collector.sources.theprotocol import (
+    TheProtocolSource,
+    _read_next_data,
+    _section_text,
+    _salary_text,
+    _extract_source_structured_data,
+    _extract_detail_structured_data,
+    _SALARY_UNIT_TO_PERIOD,
+    _KNOWN_SENIORITY_LEVELS,
+)
 
 
 def _next_data_page(payload: dict) -> MagicMock:
@@ -135,6 +144,10 @@ class TestSalaryText:
 def _make_source() -> TheProtocolSource:
     src = TheProtocolSource()
     src._page = MagicMock()
+    # Mock goto, wait_for_selector to do nothing (they're called but we don't care about their return)
+    src._page.goto.return_value = None
+    src._page.wait_for_selector.return_value = None
+    # Default behavior for fetch_description - keep for backward compatibility
     src.fetch_description = MagicMock(return_value="Full description")
     return src
 
@@ -215,10 +228,38 @@ class TestTheProtocolSourceSearch:
 
     def test_description_fetched_inline(self):
         src = _make_source()
-        src._page.eval_on_selector.return_value = json.dumps(_search_payload([_offer()]))
+        offer = _offer()
+        src._page.eval_on_selector.side_effect = [
+            json.dumps(_search_payload([offer])),
+            json.dumps(_detail_payload({
+                "textSections": [{"plainText": "Full description"}],
+                "attributes": {"employment": {"typesOfContracts": []}},
+                "technologies": {"expected": [], "optional": []},
+            })),
+        ]
         results = src.search("PHP", "Poland")
         assert results[0].description == "Full description"
-        src.fetch_description.assert_called_once()
+
+    def test_detail_structured_data_kept_even_when_description_text_is_empty(self):
+        # Regression: _fetch_description_and_detail_data() collapses
+        # description to None whenever _salary_text()/_section_text() both
+        # come back empty (via the "or None" idiom), but detail_structured
+        # is populated independently from the SAME successful page load -
+        # gating the merge on `description` being truthy silently dropped
+        # real stack_required/stack_preferred data on exactly this listing.
+        src = _make_source()
+        offer = _offer()
+        src._page.eval_on_selector.side_effect = [
+            json.dumps(_search_payload([offer])),
+            json.dumps(_detail_payload({
+                "textSections": [],
+                "attributes": {"employment": {"typesOfContracts": []}},
+                "technologies": {"expected": [{"name": "Python"}], "optional": []},
+            })),
+        ]
+        results = src.search("PHP", "Poland")
+        assert results[0].description is None
+        assert results[0].source_structured_data["stack_required"] == ["Python"]
 
     def test_skips_known_urls(self):
         src = _make_source()
@@ -226,7 +267,6 @@ class TestTheProtocolSourceSearch:
         known = {"https://theprotocol.it/praca/dup,oferta,1"}
         results = src.search("PHP", "Poland", known_urls=known)
         assert results == []
-        src.fetch_description.assert_not_called()
 
     def test_known_url_is_canonical_and_remote_fact_is_retained(self):
         src = _make_source()
@@ -249,7 +289,27 @@ class TestTheProtocolSourceSearch:
         first_payload = _search_payload([first])
         first_payload["props"]["pageProps"]["offersResponse"]["page"] = {"number": 1, "size": 1, "count": 2}
         second_payload = _search_payload([second])
-        src._page.eval_on_selector.side_effect = [json.dumps(first_payload), json.dumps(second_payload)]
+        # All listing/pagination pages are fetched first (the pagination
+        # loop runs to completion before the per-offer results loop even
+        # starts), so the real eval_on_selector call order is
+        # [search page 1, search page 2, detail 1, detail 2] - not
+        # interleaved per offer.
+        detail_payload_1 = _detail_payload({
+            "textSections": [{"plainText": "Desc 1"}],
+            "attributes": {"employment": {"typesOfContracts": []}},
+            "technologies": {"expected": [], "optional": []},
+        })
+        detail_payload_2 = _detail_payload({
+            "textSections": [{"plainText": "Desc 2"}],
+            "attributes": {"employment": {"typesOfContracts": []}},
+            "technologies": {"expected": [], "optional": []},
+        })
+        src._page.eval_on_selector.side_effect = [
+            json.dumps(first_payload),
+            json.dumps(second_payload),
+            json.dumps(detail_payload_1),
+            json.dumps(detail_payload_2),
+        ]
         results = src.search("PHP", "Poland")
         assert [job.url for job in results] == [
             "https://theprotocol.it/praca/first,oferta,1",
@@ -363,3 +423,406 @@ class TestFetchDescription:
         from playwright.sync_api import TimeoutError as PlaywrightTimeout
         src._page.goto.side_effect = PlaywrightTimeout("timeout")
         assert src.fetch_description("https://theprotocol.it/praca/foo") is None
+
+
+class TestExtractSourceStructuredData:
+    def test_seniority_extracted_for_known_level(self):
+        offer = {"positionLevels": [{"value": "senior"}]}
+        data = _extract_source_structured_data(offer)
+        assert data["seniority"] == "senior"
+
+    def test_seniority_extracted_for_junior(self):
+        offer = {"positionLevels": [{"value": "junior"}]}
+        data = _extract_source_structured_data(offer)
+        assert data["seniority"] == "junior"
+
+    def test_seniority_extracted_for_mid(self):
+        offer = {"positionLevels": [{"value": "mid"}]}
+        data = _extract_source_structured_data(offer)
+        assert data["seniority"] == "mid"
+
+    def test_seniority_extracted_for_lead(self):
+        offer = {"positionLevels": [{"value": "lead"}]}
+        data = _extract_source_structured_data(offer)
+        assert data["seniority"] == "lead"
+
+    def test_seniority_extracted_for_director(self):
+        offer = {"positionLevels": [{"value": "director"}]}
+        data = _extract_source_structured_data(offer)
+        assert data["seniority"] == "director"
+
+    def test_seniority_skipped_for_unknown_manager(self):
+        offer = {"positionLevels": [{"value": "manager"}]}
+        data = _extract_source_structured_data(offer)
+        assert "seniority" not in data
+
+    def test_seniority_skipped_for_unknown_trainee(self):
+        offer = {"positionLevels": [{"value": "trainee"}]}
+        data = _extract_source_structured_data(offer)
+        assert "seniority" not in data
+
+    def test_seniority_skipped_when_empty(self):
+        offer = {"positionLevels": []}
+        data = _extract_source_structured_data(offer)
+        assert "seniority" not in data
+
+    def test_seniority_skipped_when_missing(self):
+        offer = {}
+        data = _extract_source_structured_data(offer)
+        assert "seniority" not in data
+
+    def test_salary_extracted_with_all_fields(self):
+        offer = {
+            "typesOfContracts": [{
+                "salary": {
+                    "from": 22000,
+                    "to": 26000,
+                    "currencySymbol": "zł",
+                    "timeUnit": {"shortForm": "mth."},
+                }
+            }]
+        }
+        data = _extract_source_structured_data(offer)
+        assert data["salary_min"] == 22000
+        assert data["salary_max"] == 26000
+        assert data["salary_currency"] == "PLN"
+        assert data["salary_period"] == "monthly"
+        assert data["_salary_disclosed"] is True
+
+    def test_salary_extracted_with_polish_period(self):
+        offer = {
+            "typesOfContracts": [{
+                "salary": {
+                    "from": 22000,
+                    "to": 26000,
+                    "currencySymbol": "zł",
+                    "timeUnit": {"shortForm": "mies."},
+                }
+            }]
+        }
+        data = _extract_source_structured_data(offer)
+        assert data["salary_period"] == "monthly"
+
+    def test_salary_extracted_with_hourly_period(self):
+        offer = {
+            "typesOfContracts": [{
+                "salary": {
+                    "from": 100,
+                    "to": 150,
+                    "currencySymbol": "zł",
+                    "timeUnit": {"shortForm": "godz."},
+                }
+            }]
+        }
+        data = _extract_source_structured_data(offer)
+        assert data["salary_period"] == "hourly"
+
+    def test_salary_skipped_when_from_missing(self):
+        offer = {
+            "typesOfContracts": [{
+                "salary": {
+                    "from": None,
+                    "to": 26000,
+                    "currencySymbol": "zł",
+                    "timeUnit": {"shortForm": "mth."},
+                }
+            }]
+        }
+        data = _extract_source_structured_data(offer)
+        assert "salary_min" not in data
+
+    def test_salary_skipped_when_to_missing(self):
+        offer = {
+            "typesOfContracts": [{
+                "salary": {
+                    "from": 22000,
+                    "to": None,
+                    "currencySymbol": "zł",
+                    "timeUnit": {"shortForm": "mth."},
+                }
+            }]
+        }
+        data = _extract_source_structured_data(offer)
+        assert "salary_min" not in data
+
+    def test_salary_skipped_when_currency_unknown(self):
+        offer = {
+            "typesOfContracts": [{
+                "salary": {
+                    "from": 22000,
+                    "to": 26000,
+                    "currencySymbol": "XYZ",
+                    "timeUnit": {"shortForm": "mth."},
+                }
+            }]
+        }
+        data = _extract_source_structured_data(offer)
+        assert "salary_min" not in data
+
+    def test_salary_skipped_when_period_unknown(self):
+        offer = {
+            "typesOfContracts": [{
+                "salary": {
+                    "from": 22000,
+                    "to": 26000,
+                    "currencySymbol": "zł",
+                    "timeUnit": {"shortForm": "unknown"},
+                }
+            }]
+        }
+        data = _extract_source_structured_data(offer)
+        assert "salary_min" not in data
+
+    def test_salary_skipped_when_timeunit_missing(self):
+        offer = {
+            "typesOfContracts": [{
+                "salary": {
+                    "from": 22000,
+                    "to": 26000,
+                    "currencySymbol": "zł",
+                }
+            }]
+        }
+        data = _extract_source_structured_data(offer)
+        assert "salary_min" not in data
+
+    def test_salary_skipped_when_no_contracts(self):
+        offer = {"typesOfContracts": []}
+        data = _extract_source_structured_data(offer)
+        assert "salary_min" not in data
+
+    def test_salary_with_euro_currency(self):
+        offer = {
+            "typesOfContracts": [{
+                "salary": {
+                    "from": 50000,
+                    "to": 70000,
+                    "currencySymbol": "€",
+                    "timeUnit": {"shortForm": "mth."},
+                }
+            }]
+        }
+        data = _extract_source_structured_data(offer)
+        assert data["salary_currency"] == "EUR"
+
+    def test_salary_rounding(self):
+        # 22500.6/26500.7 (not a plain .5) to sidestep Python's round-half-
+        # to-even banker's rounding, which would otherwise round 22500.5
+        # down to 22500 rather than up - not a bug, just the wrong value to
+        # assert an unambiguous round-up with.
+        offer = {
+            "typesOfContracts": [{
+                "salary": {
+                    "from": 22500.6,
+                    "to": 26500.7,
+                    "currencySymbol": "zł",
+                    "timeUnit": {"shortForm": "mth."},
+                }
+            }]
+        }
+        data = _extract_source_structured_data(offer)
+        assert data["salary_min"] == 22501
+        assert data["salary_max"] == 26501
+
+
+class TestExtractDetailStructuredData:
+    def test_stack_required_extracted_from_expected(self):
+        offer = {
+            "technologies": {
+                "expected": [{"name": "Python"}, {"name": "Django"}],
+                "optional": [],
+            }
+        }
+        data = _extract_detail_structured_data(offer)
+        assert "stack_required" in data
+        assert data["stack_required"] == ["Python", "Django"]
+
+    def test_stack_preferred_extracted_from_optional(self):
+        offer = {
+            "technologies": {
+                "expected": [],
+                "optional": [{"name": "React"}, {"name": "TypeScript"}],
+            }
+        }
+        data = _extract_detail_structured_data(offer)
+        assert "stack_preferred" in data
+        assert data["stack_preferred"] == ["React", "TypeScript"]
+
+    def test_both_stack_required_and_preferred(self):
+        offer = {
+            "technologies": {
+                "expected": [{"name": "Python"}],
+                "optional": [{"name": "Django"}],
+            }
+        }
+        data = _extract_detail_structured_data(offer)
+        assert data["stack_required"] == ["Python"]
+        assert data["stack_preferred"] == ["Django"]
+
+    def test_empty_optional_not_written(self):
+        offer = {
+            "technologies": {
+                "expected": [{"name": "Python"}],
+                "optional": [],
+            }
+        }
+        data = _extract_detail_structured_data(offer)
+        assert "stack_required" in data
+        assert "stack_preferred" not in data
+
+    def test_empty_expected_not_written(self):
+        offer = {
+            "technologies": {
+                "expected": [],
+                "optional": [{"name": "Python"}],
+            }
+        }
+        data = _extract_detail_structured_data(offer)
+        assert "stack_required" not in data
+        assert "stack_preferred" in data
+
+    def test_missing_technologies_key(self):
+        offer = {}
+        data = _extract_detail_structured_data(offer)
+        assert "stack_required" not in data
+        assert "stack_preferred" not in data
+
+    def test_technologies_with_os_key_ignored(self):
+        offer = {
+            "technologies": {
+                "expected": [{"name": "Python"}],
+                "optional": [],
+                "os": [{"name": "Linux"}],
+            }
+        }
+        data = _extract_detail_structured_data(offer)
+        assert data["stack_required"] == ["Python"]
+        assert "stack_preferred" not in data
+
+
+class TestSearchStructuredData:
+    def test_seniority_in_structured_data(self):
+        src = _make_source()
+        offer = _offer()
+        offer["positionLevels"] = [{"value": "senior"}]
+        src._page.eval_on_selector.return_value = json.dumps(_search_payload([offer]))
+        results = src.search("PHP", "Poland")
+        assert len(results) == 1
+        assert results[0].source_structured_data["seniority"] == "senior"
+
+    def test_salary_in_structured_data(self):
+        src = _make_source()
+        offer = _offer()
+        offer["typesOfContracts"] = [{
+            "salary": {
+                "from": 22000,
+                "to": 26000,
+                "currencySymbol": "zł",
+                "timeUnit": {"shortForm": "mth."},
+            }
+        }]
+        src._page.eval_on_selector.return_value = json.dumps(_search_payload([offer]))
+        results = src.search("PHP", "Poland")
+        assert len(results) == 1
+        assert results[0].source_structured_data["salary_min"] == 22000
+        assert results[0].source_structured_data["salary_max"] == 26000
+        assert results[0].source_structured_data["salary_currency"] == "PLN"
+        assert results[0].source_structured_data["salary_period"] == "monthly"
+        assert results[0].source_structured_data["_salary_disclosed"] is True
+
+    def test_stack_required_in_structured_data(self):
+        src = _make_source()
+        offer = _offer()
+        offer["positionLevels"] = [{"value": "senior"}]
+        src._page.eval_on_selector.side_effect = [
+            json.dumps(_search_payload([offer])),
+            json.dumps(_detail_payload({
+                "textSections": [{"plainText": "Desc"}],
+                "attributes": {"employment": {"typesOfContracts": []}},
+                "technologies": {
+                    "expected": [{"name": "Python"}, {"name": "Django"}],
+                    "optional": [],
+                },
+            })),
+        ]
+        results = src.search("PHP", "Poland")
+        assert len(results) == 1
+        assert results[0].source_structured_data["stack_required"] == ["Python", "Django"]
+
+    def test_stack_preferred_in_structured_data(self):
+        src = _make_source()
+        offer = _offer()
+        src._page.eval_on_selector.side_effect = [
+            json.dumps(_search_payload([offer])),
+            json.dumps(_detail_payload({
+                "textSections": [{"plainText": "Desc"}],
+                "attributes": {"employment": {"typesOfContracts": []}},
+                "technologies": {
+                    "expected": [{"name": "Python"}],
+                    "optional": [{"name": "React"}, {"name": "TypeScript"}],
+                },
+            })),
+        ]
+        results = src.search("PHP", "Poland")
+        assert len(results) == 1
+        assert results[0].source_structured_data["stack_required"] == ["Python"]
+        assert results[0].source_structured_data["stack_preferred"] == ["React", "TypeScript"]
+
+    def test_manager_seniority_not_in_structured_data(self):
+        src = _make_source()
+        offer = _offer()
+        offer["positionLevels"] = [{"value": "manager"}]
+        src._page.eval_on_selector.return_value = json.dumps(_search_payload([offer]))
+        results = src.search("PHP", "Poland")
+        assert len(results) == 1
+        assert "seniority" not in results[0].source_structured_data
+
+    def test_remote_fields_preserved_with_structured_data(self):
+        src = _make_source()
+        offer = _offer(work_modes=["remote"])
+        offer["positionLevels"] = [{"value": "senior"}]
+        src._page.eval_on_selector.return_value = json.dumps(_search_payload([offer]))
+        results = src.search("PHP", "Poland")
+        assert len(results) == 1
+        assert results[0].source_structured_data["remote"] is True
+        assert results[0].source_structured_data["remote_available"] is True
+        assert results[0].source_structured_data["remote_regions"] == ["Poland"]
+        assert results[0].source_structured_data["seniority"] == "senior"
+
+    def test_all_structured_data_fields_combined(self):
+        src = _make_source()
+        offer = _offer(work_modes=["remote"])
+        offer["positionLevels"] = [{"value": "senior"}]
+        offer["typesOfContracts"] = [{
+            "salary": {
+                "from": 22000,
+                "to": 26000,
+                "currencySymbol": "zł",
+                "timeUnit": {"shortForm": "mth."},
+            }
+        }]
+        src._page.eval_on_selector.side_effect = [
+            json.dumps(_search_payload([offer])),
+            json.dumps(_detail_payload({
+                "textSections": [{"plainText": "Desc"}],
+                "attributes": {"employment": {"typesOfContracts": []}},
+                "technologies": {
+                    "expected": [{"name": "Python"}],
+                    "optional": [{"name": "Django"}],
+                },
+            })),
+        ]
+        results = src.search("PHP", "Poland")
+        assert len(results) == 1
+        data = results[0].source_structured_data
+        assert data["remote"] is True
+        assert data["remote_available"] is True
+        assert data["remote_regions"] == ["Poland"]
+        assert data["seniority"] == "senior"
+        assert data["salary_min"] == 22000
+        assert data["salary_max"] == 26000
+        assert data["salary_currency"] == "PLN"
+        assert data["salary_period"] == "monthly"
+        assert data["_salary_disclosed"] is True
+        assert data["stack_required"] == ["Python"]
+        assert data["stack_preferred"] == ["Django"]

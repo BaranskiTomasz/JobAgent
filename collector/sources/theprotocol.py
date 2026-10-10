@@ -82,6 +82,74 @@ def _section_text(offer: dict) -> str:
 # the extractor's schema expects, so it's normalized here.
 _CURRENCY_SYMBOLS = {"zł": "PLN", "€": "EUR", "$": "USD", "£": "GBP"}
 
+# extractor/runner.py's schema, same keys/enums, so this can be overlaid
+# directly onto Haiku's output with no translation step.
+_SALARY_UNIT_TO_PERIOD = {"mth.": "monthly", "mies.": "monthly", "hr.": "hourly", "godz.": "hourly"}
+_KNOWN_SALARY_CURRENCIES = {"PLN", "EUR", "USD", "GBP"}
+_KNOWN_SENIORITY_LEVELS = {"junior", "mid", "senior", "lead", "director"}
+
+
+def _extract_source_structured_data(offer: dict) -> dict:
+    """Return fields theprotocol.it exposes natively in its listing-level offer objects."""
+    data: dict = {}
+
+    # Seniority from positionLevels
+    position_levels = offer.get("positionLevels") or []
+    if position_levels:
+        seniority = position_levels[0].get("value")
+        if seniority in _KNOWN_SENIORITY_LEVELS:
+            data["seniority"] = seniority
+
+    # Salary from typesOfContracts
+    contracts = offer.get("typesOfContracts") or []
+    if contracts:
+        contract = contracts[0]  # Use first contract if multiple
+        salary = contract.get("salary")
+        if salary:
+            salary_from = salary.get("from")
+            salary_to = salary.get("to")
+            currency_symbol = salary.get("currencySymbol")
+            time_unit = (salary.get("timeUnit") or {}).get("shortForm")
+            
+            # Normalize currency
+            currency = _CURRENCY_SYMBOLS.get(currency_symbol, currency_symbol or "")
+            
+            # Map period
+            period = _SALARY_UNIT_TO_PERIOD.get(time_unit) if time_unit else None
+            
+            # Only write salary fields if ALL are resolved
+            if (salary_from is not None and salary_to is not None and 
+                currency in _KNOWN_SALARY_CURRENCIES and period):
+                data["salary_min"] = round(salary_from)
+                data["salary_max"] = round(salary_to)
+                data["_salary_disclosed"] = True
+                data["salary_currency"] = currency
+                data["salary_period"] = period
+
+    return data
+
+
+def _extract_detail_structured_data(offer: dict) -> dict:
+    """Return fields from the detail page's offer object (technologies split)."""
+    data: dict = {}
+    
+    # Stack required/preferred from technologies
+    technologies = (offer.get("technologies") or {}).get("expected") or []
+    if technologies:
+        # Extract just the name strings from {"name": ...} dicts
+        required = [t["name"] if isinstance(t, dict) and "name" in t else str(t) for t in technologies]
+        if required:
+            data["stack_required"] = required
+    
+    optional_tech = (offer.get("technologies") or {}).get("optional") or []
+    if optional_tech:
+        # Extract just the name strings from {"name": ...} dicts
+        preferred = [t["name"] if isinstance(t, dict) and "name" in t else str(t) for t in optional_tech]
+        if preferred:
+            data["stack_preferred"] = preferred
+    
+    return data
+
 
 def _salary_text(offer: dict) -> str:
     contracts = (offer.get("attributes") or {}).get("employment", {}).get("typesOfContracts") or []
@@ -154,6 +222,25 @@ class TheProtocolSource(JobSource):
             return None
         parts = [p for p in (_salary_text(offer), _section_text(offer)) if p]
         return "\n\n".join(parts) or None
+
+    def _fetch_description_and_detail_data(self, url: str) -> tuple[str | None, dict | None]:
+        """Fetch both the description text and detail-level structured data in one navigation."""
+        try:
+            self._page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+        except PlaywrightTimeout:
+            return None, None
+        except Exception:
+            return None, None
+        data = _read_next_data(self._page)
+        if not data:
+            return None, None
+        offer = data.get("props", {}).get("pageProps", {}).get("offer")
+        if not offer:
+            return None, None
+        parts = [p for p in (_salary_text(offer), _section_text(offer)) if p]
+        description = "\n\n".join(parts) or None
+        detail_structured = _extract_detail_structured_data(offer)
+        return description, detail_structured
 
     def search(
         self,
@@ -264,6 +351,9 @@ class TheProtocolSource(JobSource):
             modes.discard(None)
             location_str = f"{city}, Poland{workplace_suffix(modes)}" if city else f"Poland{workplace_suffix(modes)}"
 
+            # Extract structured data from the listing-level offer object
+            listing_data = _extract_source_structured_data(offer)
+            
             source_data = {}
             if "remote" in modes:
                 source_data = {
@@ -271,12 +361,26 @@ class TheProtocolSource(JobSource):
                     "remote_available": True,
                     "remote_regions": ["Poland"],
                 }
+            
+            # Merge listing-level structured data
+            source_data.update(listing_data)
+            
             if max_results and len(results) >= max_results:
                 continue
             detail_attempted += 1
-            description = self.fetch_description(job_url)
+            description, detail_structured = self._fetch_description_and_detail_data(job_url)
+            # detail_structured is populated whenever the detail page itself
+            # loaded successfully, independent of whether _salary_text()/
+            # _section_text() happened to both come back empty for this
+            # listing (description then collapses to None via the "or None"
+            # in _fetch_description_and_detail_data) - gating this merge on
+            # `description` being truthy silently dropped real
+            # stack_required/stack_preferred data on exactly that listing.
+            if detail_structured is not None:
+                source_data.update(detail_structured)
             if not description:
                 detail_failed += 1
+
             results.append(RawJob(
                 title=offer.get("title", ""),
                 company=offer.get("employer", ""),
