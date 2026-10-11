@@ -918,5 +918,20 @@
     "name": "OpenAI",
     "slug": "openai",
     "source": "ashby"
+  },
+  {
+    "name": "n8n",
+    "slug": "n8n",
+    "source": "ashby"
+  },
+  {
+    "name": "PostHog",
+    "slug": "posthog",
+    "source": "ashby"
+  },
+  {
+    "name": "Snyk",
+    "slug": "snyk",
+    "source": "ashby"
   }
 ]
