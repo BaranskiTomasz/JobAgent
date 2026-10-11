@@ -11,7 +11,7 @@ from db.repositories.usage_repository import log_anthropic
 
 logger = logging.getLogger(__name__)
 
-FACT_SCHEMA_VERSION = 5
+FACT_SCHEMA_VERSION = 6
 
 _SKILL_ALIASES = {
     "node": "nodejs", "node.js": "nodejs", "nodejs": "nodejs",
@@ -78,6 +78,14 @@ _EXTRACT_TOOL = {
             "company_type": {
                 "type": "string",
                 "enum": ["startup", "scaleup", "enterprise", "agency", "unknown"],
+            },
+            "company_country": {
+                "type": ["string", "null"],
+                "description": (
+                    "Employer's country as an ISO 3166-1 alpha-2 code only when explicitly stated "
+                    "(e.g. 'DE'). null if not mentioned. This identifies the company, independently "
+                    "of where remote work is allowed or which countries are eligible to apply."
+                ),
             },
             "product_vs_outsourcing": {
                 "type": "string",
@@ -207,7 +215,7 @@ _EXTRACT_TOOL = {
             "office_presence_required", "seniority",
             "salary_min", "salary_max", "salary_period", "salary_currency",
             "stack", "stack_required", "stack_preferred",
-            "company_type", "product_vs_outsourcing", "working_language",
+            "company_type", "company_country", "product_vs_outsourcing", "working_language",
             "remote_regions", "timezone_requirement", "contract_types",
             "role_family", "role_specializations", "seniority_min", "seniority_max",
             "individual_contributor", "people_management", "responsibilities", "skills",

@@ -2,6 +2,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from extractor.runner import (
+    _CATALOG_GATE_TOOL,
     _EXTRACT_TOOL,
     _catalog_extract,
     _catalog_gate_rejects,
@@ -62,7 +63,7 @@ class TestExtractionSchema:
     # was a bare boolean with no geo information, so nothing in the pipeline
     # could ever tell "remote, Poland only" from "remote, US only" apart.
     _NEW_FIELDS = {
-        "remote_regions", "timezone_requirement", "contract_types",
+        "remote_regions", "timezone_requirement", "company_country", "contract_types",
         "stack_required", "stack_preferred",
     }
 
@@ -84,6 +85,50 @@ class TestExtractionSchema:
 
     def test_timezone_requirement_is_nullable_string(self):
         assert _EXTRACT_TOOL["input_schema"]["properties"]["timezone_requirement"]["type"] == ["string", "null"]
+
+    def test_company_country_is_nullable_string_and_excluded_from_catalog_gate(self):
+        assert _EXTRACT_TOOL["input_schema"]["properties"]["company_country"]["type"] == ["string", "null"]
+        assert "company_country" not in _CATALOG_GATE_TOOL["input_schema"]["properties"]
+        assert "company_country" not in _CATALOG_GATE_TOOL["input_schema"]["required"]
+
+    @patch("extractor.runner._get_client")
+    def test_company_country_populated_when_employer_country_is_explicit(self, mock_get_client):
+        mock_get_client.return_value.messages.create.return_value = _make_tool_response({
+            "company_country": "DE",
+        })
+
+        result = extract_job("Acme GmbH is a German company headquartered in Berlin.")
+
+        assert result["company_country"] == "DE"
+
+    @patch("extractor.runner._get_client")
+    def test_company_country_null_when_employer_country_is_unstated(self, mock_get_client):
+        mock_get_client.return_value.messages.create.return_value = _make_tool_response({
+            "company_country": None,
+        })
+
+        result = extract_job("Join our distributed engineering team as a backend developer.")
+
+        assert result["company_country"] is None
+
+    @patch("extractor.runner._get_client")
+    def test_company_country_is_independent_from_remote_and_candidate_countries(self, mock_get_client):
+        mock_get_client.return_value.messages.create.return_value = _make_tool_response({
+            "company_country": "DE",
+            "remote_regions": ["Poland"],
+            "country_eligibility": [{
+                "country_code": "PL",
+                "eligible": True,
+                "engagement_modes": ["b2b"],
+                "evidence": "Remote from Poland",
+            }],
+        })
+
+        result = extract_job("German employer headquartered in Berlin. This role is remote from Poland.")
+
+        assert result["company_country"] == "DE"
+        assert result["remote_regions"] == ["Poland"]
+        assert result["country_eligibility"][0]["country_code"] == "PL"
 
     @patch("extractor.runner._get_client")
     def test_new_fields_round_trip_through_extract_job(self, mock_get_client):
