@@ -1,8 +1,10 @@
 import sys
 import random
+import threading
 import time
 import logging
 import math
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
@@ -193,6 +195,229 @@ _MAX_TOTAL_SEARCHES = 150
 _MAX_QUERIES_PER_SOURCE = 6
 
 
+class _GlobalJobCap:
+    """Enforces max_jobs as a hard ceiling across sources running concurrently
+    (each source's own source_budget is a fair-share target, not a hard cap on
+    its own - only this shared counter is)."""
+
+    def __init__(self, max_jobs: int | None):
+        self._remaining = max_jobs
+        self._lock = threading.Lock()
+
+    def has_room(self) -> bool:
+        with self._lock:
+            return self._remaining is None or self._remaining > 0
+
+    def try_reserve(self) -> bool:
+        with self._lock:
+            if self._remaining is not None and self._remaining <= 0:
+                return False
+            if self._remaining is not None:
+                self._remaining -= 1
+            return True
+
+
+def _collect_from_source(
+    source_id: str,
+    locations_for_source: list[str],
+    search_queries: list[str],
+    days_back: int,
+    source_budget: int | None,
+    global_cap: "_GlobalJobCap | None",
+    known_urls: set[str],
+    known_urls_lock: "threading.Lock",
+    rejected_kw: list[str],
+    session_id: int,
+    catalog: bool,
+) -> dict:
+    """Runs one source to completion (its own queries x locations, with its own
+    stealth pacing if it needs one) and returns its results. Never raises: a
+    source's own failure is caught, logged and recorded, so running several of
+    these concurrently isolates one source's problems from the others."""
+    result = {"jobs_found": 0, "jobs_new": 0, "pending_description": [], "prefiltered": 0, "job_ids": []}
+    log_prefix = f"[{source_id}] "
+    source_error_recorded = False
+    try:
+        source = make_source(source_id, days_back=days_back, catalog=catalog)
+
+        with source:
+            source.login()
+
+            queries_for_source = source_queries(source_id, search_queries)
+            try:
+                query_summary = search_stats_repository.get_query_summary(source_id)
+            except Exception:
+                query_summary = []
+            queries_for_source = order_queries(queries_for_source, query_summary, session_id)
+            if source_id == "linkedin":
+                excluded = excluded_search_queries_repository.get_excluded("linkedin")
+                if excluded:
+                    for q in search_queries:
+                        if q in excluded:
+                            logger.info(f"  {log_prefix}[prune] Skipping LinkedIn query {q!r} (auto-excluded: {excluded[q]})")
+                    queries_for_source = [q for q in queries_for_source if q.original not in excluded]
+            queries_for_source = queries_for_source[:_MAX_QUERIES_PER_SOURCE]
+
+            jobs_new_this_source = 0
+            source_searches = 0
+            source_cap_hit = False
+
+            first_search = True
+            pending_pause = 0.0
+            for query_index, query in enumerate(queries_for_source):
+                title = query.original
+                if source_budget and jobs_new_this_source >= source_budget:
+                    break
+                if source_cap_hit:
+                    break
+                if global_cap is not None and not global_cap.has_room():
+                    break
+                remaining_queries = len(queries_for_source) - query_index
+                query_budget = (
+                    math.ceil((source_budget - jobs_new_this_source) / remaining_queries)
+                    if source_budget is not None else None
+                )
+                jobs_new_this_query = 0
+                for location in locations_for_source:
+                    if source_budget and jobs_new_this_source >= source_budget:
+                        break
+                    if query_budget and jobs_new_this_query >= query_budget:
+                        break
+                    if global_cap is not None and not global_cap.has_room():
+                        break
+                    if source.requires_stealth_pauses and source_searches >= _MAX_TOTAL_SEARCHES:
+                        logger.warning(
+                            f"\n{log_prefix}[search-cap] Reached the {_MAX_TOTAL_SEARCHES}-search limit for this run, "
+                            "stopping early rather than continuing unbounded."
+                        )
+                        source_cap_hit = True
+                        break
+
+                    if not first_search and source.requires_stealth_pauses:
+                        resume = (datetime.now() + timedelta(seconds=pending_pause)).strftime("%H:%M")
+                        logger.info(f"  {log_prefix}[stealth] Pausing {pending_pause:.0f}s before next search... → resume ~{resume}")
+                        time.sleep(pending_pause)
+                    first_search = False
+
+                    logger.info(f"\n{log_prefix}Searching: {title!r} in {location!r}")
+                    if source.requires_stealth_pauses:
+                        source_searches += 1
+                    remaining = None
+                    if query_budget:
+                        remaining = min(query_budget - jobs_new_this_query, source_budget - jobs_new_this_source)
+                    source.last_search_diagnostics = {}
+                    try:
+                        raw_jobs = source.search(query.outbound, location, max_results=remaining, known_urls=known_urls)
+                    except Exception as exc:
+                        search_stats_repository.record(
+                            session_id, source_id, title, location, cards_found=0, new_found=0,
+                            source_status="error", source_error=str(exc)[:1000],
+                        )
+                        source_error_recorded = True
+                        raise
+                    diagnostics = getattr(source, "last_search_diagnostics", {})
+                    source_returned = len(raw_jobs)
+                    known_url_filtered = diagnostics.get("known_url_filtered")
+                    if known_url_filtered is None and "geo_matched" in diagnostics:
+                        known_url_filtered = max(diagnostics["geo_matched"] - source_returned, 0)
+                    raw_jobs = [
+                        raw for raw in raw_jobs
+                        if job_matches_query(title, raw.title, raw.description)
+                    ]
+                    global_matched = len(raw_jobs)
+                    result["jobs_found"] += len(raw_jobs)
+
+                    new_this_search = 0
+                    duplicate_this_search = 0
+                    insert_failed = False
+                    for raw in raw_jobs:
+                        if source_budget and jobs_new_this_source >= source_budget:
+                            break
+                        if query_budget and jobs_new_this_query >= query_budget:
+                            break
+                        if global_cap is not None and not global_cap.try_reserve():
+                            break
+                        try:
+                            job_id = job_repository.insert(
+                                title=raw.title,
+                                company=raw.company,
+                                location=raw.location,
+                                url=raw.url,
+                                source=raw.source,
+                                source_id=raw.source_id,
+                                description=raw.description,
+                                search_query=title,
+                                posted_at=raw.posted_at,
+                                source_structured_data=raw.source_structured_data,
+                                catalog=catalog,
+                            )
+                        except Exception as e:
+                            # A single job's insert failing shouldn't take down
+                            # the whole run.
+                            logger.warning(f"  {log_prefix}Skip (insert failed): {raw.title} @ {raw.company}, {e}")
+                            insert_failed = True
+                            continue
+                        if job_id is None:
+                            logger.info(f"  {log_prefix}Skip (duplicate): {raw.title} @ {raw.company}")
+                            duplicate_this_search += 1
+                            continue
+
+                        result["jobs_new"] += 1
+                        result["job_ids"].append(job_id)
+                        jobs_new_this_source += 1
+                        jobs_new_this_query += 1
+                        new_this_search += 1
+                        with known_urls_lock:
+                            known_urls.add(raw.url)
+                        if not raw.description:
+                            reason = title_banned_reason(raw.title, rejected_kw) if rejected_kw and not catalog else None
+                            if reason:
+                                job_repository.update_score_and_status(job_id, 0.0, reason, "auto_rejected")
+                                result["prefiltered"] += 1
+                                logger.info(f"  {log_prefix}[prefilter] {raw.title} @ {raw.company}, {reason}")
+                            else:
+                                result["pending_description"].append((job_id, raw.url, source_id))
+                        logger.info(f"  {log_prefix}[{result['jobs_new']}] {raw.title} @ {raw.company}")
+
+                    diagnostic_status = diagnostics.get("source_status") or diagnostics.get("status")
+                    if diagnostic_status not in {"ok", "empty", "partial", "error"}:
+                        diagnostic_status = None
+                    source_status = diagnostic_status or ("empty" if diagnostics.get("empty_payload") else "ok")
+                    if diagnostics.get("partial") or insert_failed:
+                        source_status = "partial"
+                    search_stats_repository.record(
+                        session_id, source_id, title, location,
+                        cards_found=len(raw_jobs), new_found=new_this_search,
+                        upstream_found=diagnostics.get("upstream_found", len(raw_jobs)),
+                        query_matched=diagnostics.get("query_matched", len(raw_jobs)),
+                        date_matched=diagnostics.get("date_matched", len(raw_jobs)),
+                        geo_matched=diagnostics.get("geo_matched", len(raw_jobs)),
+                        source_returned=source_returned,
+                        known_url_filtered=known_url_filtered,
+                        global_matched=global_matched,
+                        duplicate_found=duplicate_this_search,
+                        inserted_found=new_this_search,
+                        source_status=source_status,
+                        source_error=(diagnostics.get("source_error") or diagnostics.get("error")),
+                    )
+
+                    if source.requires_stealth_pauses:
+                        pending_pause = _search_pause_seconds(new_this_search)
+
+    except Exception as exc:
+        if not source_error_recorded:
+            try:
+                search_stats_repository.record(
+                    session_id, source_id, "__source__", "", cards_found=0, new_found=0,
+                    source_status="error", source_error=str(exc)[:1000],
+                )
+            except Exception as stats_exc:
+                logger.warning(f"{log_prefix}Could not record source failure: {stats_exc}")
+        logger.warning(f"{log_prefix}Source failed, skipping: {exc}")
+
+    return result
+
+
 def _collect_job_cards(
     selected_sources: list[str],
     search_queries: list[str],
@@ -207,208 +432,49 @@ def _collect_job_cards(
     catalog: bool = False,
     collected_ids: list[str] | None = None,
 ) -> tuple[int, int, list[tuple[str, str, str]]]:
-    jobs_found = 0
-    jobs_new = 0
-    jobs_pending_description: list[tuple[str, str, str]] = []
-    jobs_prefiltered = 0
     applicable_sources = [
         source_id for source_id in selected_sources
         if _locations_for_source(source_id, locations, work_country)
     ]
-
-    for source_index, source_id in enumerate(applicable_sources):
-        if max_jobs is not None and jobs_new >= max_jobs:
-            break
-
-        locations_for_source = _locations_for_source(source_id, locations, work_country)
-        if not locations_for_source:
+    for source_id in selected_sources:
+        if source_id not in applicable_sources:
             logger.info(f"\n[{source_id}] Skipping, none of the candidate's selected countries apply to this source.")
-            continue
 
-        logger.info(f"\n[{source_id}] Starting source...")
-        source_error_recorded = False
-        try:
-            source = make_source(source_id, days_back=days_back, catalog=catalog)
+    # Fair-share budgets instead of first-come-first-served, so one source
+    # can't consume the whole max_jobs budget. All sources run concurrently
+    # now, so this split happens up front instead of being recomputed after
+    # each source finishes (which assumed sequential execution) - a source
+    # that finds fewer jobs than its share no longer frees that headroom for
+    # a sibling still in progress, a reasonable trade-off for running in
+    # parallel instead of one at a time.
+    per_source_budget = math.ceil(max_jobs / len(applicable_sources)) if max_jobs is not None and applicable_sources else None
+    if max_jobs_per_source is not None:
+        per_source_budget = min(per_source_budget, max_jobs_per_source) if per_source_budget is not None else max_jobs_per_source
 
-            with source:
-                source.login()
+    jobs_found = jobs_new = jobs_prefiltered = 0
+    jobs_pending_description: list[tuple[str, str, str]] = []
+    known_urls_lock = threading.Lock()
+    global_cap = _GlobalJobCap(max_jobs)
 
-                queries_for_source = source_queries(source_id, search_queries)
-                try:
-                    query_summary = search_stats_repository.get_query_summary(source_id)
-                except Exception:
-                    query_summary = []
-                queries_for_source = order_queries(queries_for_source, query_summary, session_id)
-                if source_id == "linkedin":
-                    excluded = excluded_search_queries_repository.get_excluded("linkedin")
-                    if excluded:
-                        for q in search_queries:
-                            if q in excluded:
-                                logger.info(f"  [prune] Skipping LinkedIn query {q!r} (auto-excluded: {excluded[q]})")
-                        queries_for_source = [q for q in queries_for_source if q.original not in excluded]
-                queries_for_source = queries_for_source[:_MAX_QUERIES_PER_SOURCE]
-
-                # Fair-share budgets instead of first-come-first-served, so the
-                # first source/query can't consume the whole max_jobs budget.
-                remaining_sources = len(applicable_sources) - source_index
-                source_budget = (
-                    math.ceil((max_jobs - jobs_new) / remaining_sources)
-                    if max_jobs is not None else None
-                )
-                if max_jobs_per_source is not None:
-                    source_budget = min(source_budget, max_jobs_per_source) if source_budget is not None else max_jobs_per_source
-                jobs_new_this_source = 0
-                source_searches = 0
-                source_cap_hit = False
-
-                first_search = True
-                pending_pause = 0.0
-                for query_index, query in enumerate(queries_for_source):
-                    title = query.original
-                    if source_budget and jobs_new_this_source >= source_budget:
-                        break
-                    if source_cap_hit:
-                        break
-                    remaining_queries = len(queries_for_source) - query_index
-                    query_budget = (
-                        math.ceil((source_budget - jobs_new_this_source) / remaining_queries)
-                        if source_budget is not None else None
-                    )
-                    jobs_new_this_query = 0
-                    for location in locations_for_source:
-                        if source_budget and jobs_new_this_source >= source_budget:
-                            break
-                        if query_budget and jobs_new_this_query >= query_budget:
-                            break
-                        if source.requires_stealth_pauses and source_searches >= _MAX_TOTAL_SEARCHES:
-                            logger.warning(
-                                f"\n[search-cap] Reached the {_MAX_TOTAL_SEARCHES}-search limit for this run, "
-                                "stopping early rather than continuing unbounded."
-                            )
-                            source_cap_hit = True
-                            break
-
-                        if not first_search and source.requires_stealth_pauses:
-                            resume = (datetime.now() + timedelta(seconds=pending_pause)).strftime("%H:%M")
-                            logger.info(f"  [stealth] Pausing {pending_pause:.0f}s before next search... → resume ~{resume}")
-                            time.sleep(pending_pause)
-                        first_search = False
-
-                        logger.info(f"\nSearching: {title!r} in {location!r}")
-                        if source.requires_stealth_pauses:
-                            source_searches += 1
-                        remaining = None
-                        if query_budget:
-                            remaining = min(query_budget - jobs_new_this_query, source_budget - jobs_new_this_source)
-                        source.last_search_diagnostics = {}
-                        try:
-                            raw_jobs = source.search(query.outbound, location, max_results=remaining, known_urls=known_urls)
-                        except Exception as exc:
-                            search_stats_repository.record(
-                                session_id, source_id, title, location, cards_found=0, new_found=0,
-                                source_status="error", source_error=str(exc)[:1000],
-                            )
-                            source_error_recorded = True
-                            raise
-                        diagnostics = getattr(source, "last_search_diagnostics", {})
-                        source_returned = len(raw_jobs)
-                        known_url_filtered = diagnostics.get("known_url_filtered")
-                        if known_url_filtered is None and "geo_matched" in diagnostics:
-                            known_url_filtered = max(diagnostics["geo_matched"] - source_returned, 0)
-                        raw_jobs = [
-                            raw for raw in raw_jobs
-                            if job_matches_query(title, raw.title, raw.description)
-                        ]
-                        global_matched = len(raw_jobs)
-                        jobs_found += len(raw_jobs)
-
-                        new_this_search = 0
-                        duplicate_this_search = 0
-                        insert_failed = False
-                        for raw in raw_jobs:
-                            if source_budget and jobs_new_this_source >= source_budget:
-                                break
-                            if query_budget and jobs_new_this_query >= query_budget:
-                                break
-                            try:
-                                job_id = job_repository.insert(
-                                    title=raw.title,
-                                    company=raw.company,
-                                    location=raw.location,
-                                    url=raw.url,
-                                    source=raw.source,
-                                    source_id=raw.source_id,
-                                    description=raw.description,
-                                    search_query=title,
-                                    posted_at=raw.posted_at,
-                                    source_structured_data=raw.source_structured_data,
-                                    catalog=catalog,
-                                )
-                            except Exception as e:
-                                # A single job's insert failing shouldn't take down
-                                # the whole run.
-                                logger.warning(f"  Skip (insert failed): {raw.title} @ {raw.company}, {e}")
-                                insert_failed = True
-                                continue
-                            if job_id is None:
-                                logger.info(f"  Skip (duplicate): {raw.title} @ {raw.company}")
-                                duplicate_this_search += 1
-                                continue
-
-                            jobs_new += 1
-                            if collected_ids is not None:
-                                collected_ids.append(job_id)
-                            jobs_new_this_source += 1
-                            jobs_new_this_query += 1
-                            new_this_search += 1
-                            known_urls.add(raw.url)
-                            if not raw.description:
-                                reason = title_banned_reason(raw.title, rejected_kw) if rejected_kw and not catalog else None
-                                if reason:
-                                    job_repository.update_score_and_status(job_id, 0.0, reason, "auto_rejected")
-                                    jobs_prefiltered += 1
-                                    logger.info(f"  [prefilter] {raw.title} @ {raw.company}, {reason}")
-                                else:
-                                    jobs_pending_description.append((job_id, raw.url, source_id))
-                            logger.info(f"  [{jobs_new}{'/' + str(max_jobs) if max_jobs else ''}] {raw.title} @ {raw.company}")
-                            if max_jobs is not None and jobs_new >= max_jobs:
-                                break
-
-                        diagnostic_status = diagnostics.get("source_status") or diagnostics.get("status")
-                        if diagnostic_status not in {"ok", "empty", "partial", "error"}:
-                            diagnostic_status = None
-                        source_status = diagnostic_status or ("empty" if diagnostics.get("empty_payload") else "ok")
-                        if diagnostics.get("partial") or insert_failed:
-                            source_status = "partial"
-                        search_stats_repository.record(
-                            session_id, source_id, title, location,
-                            cards_found=len(raw_jobs), new_found=new_this_search,
-                            upstream_found=diagnostics.get("upstream_found", len(raw_jobs)),
-                            query_matched=diagnostics.get("query_matched", len(raw_jobs)),
-                            date_matched=diagnostics.get("date_matched", len(raw_jobs)),
-                            geo_matched=diagnostics.get("geo_matched", len(raw_jobs)),
-                            source_returned=source_returned,
-                            known_url_filtered=known_url_filtered,
-                            global_matched=global_matched,
-                            duplicate_found=duplicate_this_search,
-                            inserted_found=new_this_search,
-                            source_status=source_status,
-                            source_error=(diagnostics.get("source_error") or diagnostics.get("error")),
-                        )
-
-                        if source.requires_stealth_pauses:
-                            pending_pause = _search_pause_seconds(new_this_search)
-
-        except Exception as exc:
-            if not source_error_recorded:
-                try:
-                    search_stats_repository.record(
-                        session_id, source_id, "__source__", "", cards_found=0, new_found=0,
-                        source_status="error", source_error=str(exc)[:1000],
-                    )
-                except Exception as stats_exc:
-                    logger.warning(f"[{source_id}] Could not record source failure: {stats_exc}")
-            logger.warning(f"[{source_id}] Source failed, skipping: {exc}")
+    if applicable_sources:
+        logger.info(f"\nRunning {len(applicable_sources)} source(s) in parallel: {', '.join(applicable_sources)}")
+    with ThreadPoolExecutor(max_workers=max(1, len(applicable_sources))) as executor:
+        futures = {
+            executor.submit(
+                _collect_from_source, source_id, _locations_for_source(source_id, locations, work_country),
+                search_queries, days_back, per_source_budget, global_cap, known_urls, known_urls_lock,
+                rejected_kw, session_id, catalog,
+            ): source_id
+            for source_id in applicable_sources
+        }
+        for future in as_completed(futures):
+            source_result = future.result()
+            jobs_found += source_result["jobs_found"]
+            jobs_new += source_result["jobs_new"]
+            jobs_prefiltered += source_result["prefiltered"]
+            jobs_pending_description.extend(source_result["pending_description"])
+            if collected_ids is not None:
+                collected_ids.extend(source_result["job_ids"])
 
     if jobs_prefiltered:
         logger.info(f"\n[prefilter] Skipped description fetch for {jobs_prefiltered} job(s), banned keyword in title")

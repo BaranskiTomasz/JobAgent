@@ -438,7 +438,12 @@ class TestCollectJobCardsBudgetAllocation:
     @patch("collector.runner.search_stats_repository")
     @patch("collector.runner.job_repository")
     @patch("collector.runner.make_source")
-    def test_unused_source_budget_is_redistributed(self, mock_make_source, mock_jobs, mock_stats):
+    def test_unused_source_budget_is_not_redistributed_since_sources_run_concurrently(self, mock_make_source, mock_jobs, mock_stats):
+        # Sources run in parallel now, so a source's fair-share budget is fixed
+        # up front rather than recomputed from how much a sibling has used so
+        # far - there's no "after the fact" to recompute from. An idle source's
+        # unused share is simply not collected, instead of topping up a busy
+        # sibling the way sequential execution used to.
         empty = _mock_source()
         full = _mock_source()
         full.search.return_value = [
@@ -453,8 +458,8 @@ class TestCollectJobCardsBudgetAllocation:
             days_back=1, max_jobs=4, known_urls=set(), rejected_kw=[], session_id=1,
         )
 
-        assert result[1] == 4
-        assert full.search.call_args.kwargs["max_results"] == 4
+        assert result[1] == 2
+        assert full.search.call_args.kwargs["max_results"] == 2
 
     @patch("collector.runner.search_stats_repository")
     @patch("collector.runner.job_repository")
