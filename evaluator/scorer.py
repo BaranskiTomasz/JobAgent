@@ -269,12 +269,18 @@ def score_job(job: dict, system_prompt: str) -> ScoreResult:
         return {**_ERROR_RESULT, "score_reason": "No tool_use block in response"}
 
     result = tool_block.input
-    return {
-        "score":        float(result.get("overall_score", 0)),
-        "score_reason": result.get("score_reason", ""),
-        "breakdown": {
-            "sub_scores": result.get("sub_scores", {}),
-            "pros":       result.get("pros", []),
-            "cons":       result.get("cons", []),
-        },
-    }
+    try:
+        return {
+            "score":        float(result.get("overall_score", 0)),
+            "score_reason": result.get("score_reason", ""),
+            "breakdown": {
+                "sub_scores": result.get("sub_scores", {}),
+                "pros":       result.get("pros", []),
+                "cons":       result.get("cons", []),
+            },
+        }
+    except (TypeError, ValueError) as e:
+        # Rare malformed tool-call output (e.g. overall_score comes back as a
+        # non-numeric string) must not raise here: evaluator/runner.py relies on
+        # score_job() never raising, so one bad job can't abort the whole batch.
+        return {**_ERROR_RESULT, "score_reason": f"Malformed scorer output: {e}"}
