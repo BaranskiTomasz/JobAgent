@@ -34,7 +34,11 @@ def test_catalog_rejects_explicit_linkedin_source():
         catalog_sources(["linkedin", "greenhouse"])
 
 
-def test_catalog_run_extracts_only_jobs_added_by_current_run():
+def test_catalog_run_extracts_the_full_pending_backlog_not_just_current_run():
+    # Not scoped to this run's own job_ids: a prior run's extraction can fail
+    # wholesale (an Anthropic outage, say) and leave postings stuck with
+    # missing facts forever, since they're already in known_urls and nothing
+    # will re-insert them. "survivor" here represents exactly that backlog.
     pending = [
         {"id": "survivor", "description": "Old remote Python role"},
         {"id": "original", "description": "New remote Python role"},
@@ -44,21 +48,33 @@ def test_catalog_run_extracts_only_jobs_added_by_current_run():
              "jobs_found": 1, "jobs_new": 1, "job_ids": ["original"],
          }), \
          patch("scripts.collect_catalog.job_repository.get_missing_facts", return_value=pending) as missing, \
-         patch("scripts.collect_catalog.run_extraction", return_value=1) as extract:
+         patch("scripts.collect_catalog.run_extraction", return_value=2) as extract:
         assert main() == 0
 
     missing.assert_called_once_with(FACT_SCHEMA_VERSION, 3, catalog=True)
-    extract.assert_called_once_with([pending[1]], catalog=True)
+    extract.assert_called_once_with(pending, catalog=True)
 
 
-def test_catalog_run_does_not_extract_backlog_when_current_jobs_are_not_pending():
+def test_catalog_run_extracts_backlog_even_when_this_run_found_nothing_new():
     pending = [{"id": "survivor", "description": "Old remote Python role"}]
     with patch("sys.argv", ["collect_catalog.py", "--max-jobs", "3"]), \
          patch("scripts.collect_catalog.run", return_value={
-             "jobs_found": 1, "jobs_new": 1, "job_ids": ["original"],
+             "jobs_found": 0, "jobs_new": 0, "job_ids": [],
          }), \
          patch("scripts.collect_catalog.job_repository.get_missing_facts", return_value=pending), \
          patch("scripts.collect_catalog.run_extraction", return_value=1) as extract:
+        assert main() == 0
+
+    extract.assert_called_once_with(pending, catalog=True)
+
+
+def test_catalog_run_skips_extraction_when_nothing_pending():
+    with patch("sys.argv", ["collect_catalog.py", "--max-jobs", "3"]), \
+         patch("scripts.collect_catalog.run", return_value={
+             "jobs_found": 0, "jobs_new": 0, "job_ids": [],
+         }), \
+         patch("scripts.collect_catalog.job_repository.get_missing_facts", return_value=[]), \
+         patch("scripts.collect_catalog.run_extraction", return_value=0) as extract:
         assert main() == 0
 
     extract.assert_not_called()

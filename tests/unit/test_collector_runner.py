@@ -432,8 +432,12 @@ class TestCollectJobCardsBudgetAllocation:
             days_back=1, max_jobs=2, known_urls=set(), rejected_kw=[], session_id=1,
         )
 
+        # Sources run concurrently, so which 2 of the 3 "win" isn't
+        # deterministic (all 3 may have already called search() before any of
+        # them reserves a slot) - the one guarantee that must hold regardless
+        # is the shared cap: never more than max_jobs actually inserted.
         assert result[1] == 2
-        assert sources["workingnomads"].search.call_count == 0
+        assert mock_jobs.insert.call_count == 2
 
     @patch("collector.runner.search_stats_repository")
     @patch("collector.runner.job_repository")

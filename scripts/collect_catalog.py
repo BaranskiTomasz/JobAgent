@@ -83,15 +83,17 @@ def main() -> int:
         profile_routing=False,
     )
     logging.info("Catalog collection complete: found=%s new=%s", result["jobs_found"], result["jobs_new"])
-    if result.get("job_ids"):
-        extraction_limit = min(max(args.max_jobs or 2000, 1), 2000)
-        pending = job_repository.get_missing_facts(
-            FACT_SCHEMA_VERSION, extraction_limit, catalog=True,
-        )
-        current_run_ids = set(result["job_ids"])
-        pending = [job for job in pending if job.get("id") in current_run_ids]
-        extracted = run_extraction(pending, catalog=True) if pending else 0
-        logging.info("Catalog extraction complete: extracted=%s", extracted)
+    # Not scoped to result["job_ids"]: a prior run's extraction can fail
+    # wholesale (an Anthropic outage, say) and leave postings behind with
+    # missing facts that nothing will ever re-insert, since they're already
+    # in known_urls. This catches up on that backlog too, not just today's
+    # new postings - including when this run itself found nothing new.
+    extraction_limit = min(max(args.max_jobs or 2000, 1), 2000)
+    pending = job_repository.get_missing_facts(
+        FACT_SCHEMA_VERSION, extraction_limit, catalog=True,
+    )
+    extracted = run_extraction(pending, catalog=True) if pending else 0
+    logging.info("Catalog extraction complete: extracted=%s", extracted)
     return 0
 
 
