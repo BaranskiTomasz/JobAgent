@@ -4,6 +4,8 @@ from unittest.mock import patch
 from db.repositories import job_repository, candidate_preferences_repository
 from evaluator.fingerprints import score_fingerprint
 from evaluator.runner import run
+from extractor.runner import FACT_SCHEMA_VERSION
+from tests.conftest import TEST_AUTOMATION_API_KEY
 
 
 def _unique_url(url: str) -> str:
@@ -13,12 +15,26 @@ def _unique_url(url: str) -> str:
     return f"{url}?t={uuid.uuid4().hex}"
 
 
-def _insert_scoreable(url="https://example.com/1", **kwargs):
-    """Insert a job that has a description and is ready to be scored."""
+def _insert_scoreable(url="https://example.com/1", facts=None, **kwargs):
+    """Insert a job that has a description and is ready to be scored. The
+    personal scoring feed now also requires a non catalog_gate
+    job_fact_extractions row (see jobs_repo._personal_extraction_eligibility_sql
+    in JobAgentWeb), matching the real pipeline where extraction always runs
+    before scoring, so this simulates that step too.
+
+    Pass `facts` to seed specific structured facts (e.g. seniority) in this
+    same call: jobs_repo.update_structured_data is write-once (only applies
+    when structured_data is still NULL), and this call already populates it,
+    so a later update_structured_data call would silently no-op."""
     defaults = dict(title="PHP Developer", company=f"Acme Corp {uuid.uuid4().hex}",
                     location="Poland", source="linkedin",
                     description="Symfony expertise required.")
-    return job_repository.insert(**{**defaults, "url": _unique_url(url), **kwargs})
+    job_id = job_repository.insert(**{**defaults, "url": _unique_url(url), **kwargs})
+    with patch("api_client.JOBAGENT_API_KEY", TEST_AUTOMATION_API_KEY):
+        job_repository.update_facts(
+            job_id, FACT_SCHEMA_VERSION, "test-model", "test-hash", facts or {"remote": True}, {}, catalog=True,
+        )
+    return job_id
 
 
 def _good_score(**overrides):
@@ -169,8 +185,7 @@ class TestEvaluatorRunner:
         # violates a tightened/newly-added criterion (or was scored
         # dealbreaker-blind because extraction hadn't succeeded yet) used to sit
         # in the pool forever.
-        job_id = _insert_scoreable()
-        job_repository.update_structured_data(job_id, {
+        job_id = _insert_scoreable(facts={
             "seniority": "junior", "_field_confidence": {"seniority": "high"},
         })
         job_repository.update_score(job_id, 6.0, "scored before this seniority preference existed")
@@ -207,8 +222,7 @@ class TestEvaluatorRunner:
         assert job["score"] == 6.0
 
     def test_dealbreaker_rejected_job_returns_when_requirement_is_relaxed(self):
-        job_id = _insert_scoreable()
-        job_repository.update_structured_data(job_id, {
+        job_id = _insert_scoreable(facts={
             "seniority": "junior", "_field_confidence": {"seniority": "high"},
         })
         candidate_preferences_repository.insert(None, {

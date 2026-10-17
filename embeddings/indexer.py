@@ -5,7 +5,8 @@ import time
 from config import VOYAGE_EMBED_MODEL
 from collector.utils import build_excerpt
 import api_client
-from embeddings.client import VoyageClient
+from embeddings.client import VoyageClient, voyage_retryable_errors
+from ranker.retry import call_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -36,20 +37,12 @@ def embedding_text_hash(job: dict) -> str:
     return hashlib.sha256(_job_to_text(job).encode()).hexdigest()
 
 
-def _embed_with_retry(client: VoyageClient, texts: list[str], max_retries: int = 6) -> list:
-    """Embed with exponential-backoff retry for rate-limit errors."""
-    for attempt in range(max_retries):
-        try:
-            return client.embed(texts)
-        except Exception as e:
-            msg = str(e).lower()
-            if "rate" in msg or "429" in msg or "limit" in msg:
-                wait = max(22, BATCH_DELAY) * (2 ** min(attempt, 3))
-                logger.warning(f"  Rate limit hit (attempt {attempt+1}), waiting {wait:.0f}s…")
-                time.sleep(wait)
-            else:
-                raise
-    return client.embed(texts)  # final attempt, let it raise
+def _embed_with_retry(client: VoyageClient, texts: list[str], input_type: str = "document") -> list:
+    return call_with_retry(
+        lambda: client.embed(texts, input_type=input_type),
+        label="Voyage embedding",
+        retryable_errors=voyage_retryable_errors(),
+    )
 
 
 def index_jobs(jobs: list[dict]) -> int:
@@ -121,7 +114,7 @@ def score_pool_by_similarity(job_ids: list[str], candidate_profile: str | None =
         if not candidate_profile:
             return {}, None
         client = _get_client()
-        [vec] = client.embed([candidate_profile], input_type="query")
+        [vec] = _embed_with_retry(client, [candidate_profile], input_type="query")
         return score_by_similarity(job_ids, vec), "CV profile / questionnaire (no applied jobs yet)"
 
     max_applied = _max_scores(job_ids, applied_vecs)

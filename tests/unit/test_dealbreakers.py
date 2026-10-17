@@ -78,6 +78,65 @@ class TestPreferenceStrengthAndConfidence:
         assert stats["auto_rejected"] == 0
         mock_update.assert_not_called()
 
+    @patch("evaluator.dealbreakers.job_repository.update_score_and_status")
+    @patch("evaluator.dealbreakers.candidate_preferences_repository.get_active")
+    def test_ambiguous_medium_confidence_work_mode_fails_open(self, mock_prefs, mock_update):
+        mock_prefs.return_value = _prefs(work_mode=["remote"])
+        job = _job(structured={
+            "remote": False, "hybrid": True,
+            "_field_confidence": {"remote": "medium", "hybrid": "medium"},
+        })
+        surviving, stats = apply_dealbreaker_filter([job])
+        assert surviving == [job]
+        assert stats["auto_rejected"] == 0
+        mock_update.assert_not_called()
+
+    @patch("evaluator.dealbreakers.job_repository.update_score_and_status")
+    @patch("evaluator.dealbreakers.candidate_preferences_repository.get_active")
+    def test_explicit_haiku_dealbreaker_facts_are_rejected(self, mock_prefs, mock_update):
+        mock_prefs.return_value = _prefs(
+            salary_min=150000, salary_currency="PLN", work_mode=["remote"],
+            work_country="Poland",
+        )
+        job = _job(structured={
+            "remote": False, "hybrid": True, "remote_regions": ["United States"],
+            "salary_max": 100000, "salary_currency": "PLN", "salary_period": "yearly",
+            "_field_confidence": {
+                "remote": "high", "hybrid": "high", "remote_regions": "high",
+                "salary_max": "high", "salary_currency": "high", "salary_period": "high",
+            },
+        })
+        surviving, stats = apply_dealbreaker_filter([job])
+        assert surviving == []
+        assert stats["auto_rejected"] == 1
+        assert "salary_max 100000" in mock_update.call_args[0][2]
+
+    @patch("evaluator.dealbreakers.job_repository.update_score_and_status")
+    @patch("evaluator.dealbreakers.candidate_preferences_repository.get_active")
+    def test_explicit_haiku_us_only_fact_is_rejected(self, mock_prefs, mock_update):
+        mock_prefs.return_value = _prefs(work_mode=["remote"], work_country="Poland")
+        job = _job(structured={
+            "remote": True, "remote_regions": ["United States"],
+            "_field_confidence": {"remote": "high", "remote_regions": "high"},
+        })
+        surviving, stats = apply_dealbreaker_filter([job])
+        assert surviving == []
+        assert stats["auto_rejected"] == 1
+        assert "restricted to United States" in mock_update.call_args[0][2]
+
+    @patch("evaluator.dealbreakers.job_repository.update_score_and_status")
+    @patch("evaluator.dealbreakers.candidate_preferences_repository.get_active")
+    def test_explicit_haiku_hybrid_required_fact_is_rejected(self, mock_prefs, mock_update):
+        mock_prefs.return_value = _prefs(work_mode=["remote"])
+        job = _job(structured={
+            "remote": False, "hybrid": True,
+            "_field_confidence": {"remote": "high", "hybrid": "high"},
+        })
+        surviving, stats = apply_dealbreaker_filter([job])
+        assert surviving == []
+        assert stats["auto_rejected"] == 1
+        assert "remote-only" in mock_update.call_args[0][2]
+
 
 class TestSalaryFloor:
     @patch("evaluator.dealbreakers.job_repository.update_score_and_status")

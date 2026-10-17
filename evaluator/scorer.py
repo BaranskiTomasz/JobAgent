@@ -1,5 +1,4 @@
 import logging
-import time
 import anthropic
 
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
@@ -7,6 +6,7 @@ from collector.utils import build_excerpt, excerpt_looks_incomplete, INCOMPLETE_
 from db.repositories.usage_repository import log_anthropic
 from db.types import ScoreResult
 from preference_agent.profile import render_signals
+from ranker.retry import call_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -232,10 +232,9 @@ def score_job(job: dict, system_prompt: str) -> ScoreResult:
     user_message = _build_user_message(job)
     client = _get_client()
 
-    response = None
-    for attempt in range(3):
-        try:
-            response = client.messages.create(
+    try:
+        response = call_with_retry(
+            lambda: client.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=700,
                 system=[{
@@ -246,15 +245,12 @@ def score_job(job: dict, system_prompt: str) -> ScoreResult:
                 messages=[{"role": "user", "content": user_message}],
                 tools=[_SCORE_TOOL],
                 tool_choice={"type": "tool", "name": "submit_score"},
-            )
-            break
-        except Exception as e:
-            if "overloaded" in str(e).lower() and attempt < 2:
-                wait = (attempt + 1) * 30
-                logger.warning(f"API overloaded, retrying in {wait}s...")
-                time.sleep(wait)
-            else:
-                return {**_ERROR_RESULT, "score_reason": f"API error: {e}"}
+            ),
+            label="Job scoring",
+            retry_if=lambda error: "overloaded" in str(error).lower(),
+        )
+    except Exception as e:
+        return {**_ERROR_RESULT, "score_reason": f"API error: {e}"}
 
     if not response or not response.content:
         return {**_ERROR_RESULT, "score_reason": "Empty response from API"}

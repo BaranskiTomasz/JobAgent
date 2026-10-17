@@ -44,6 +44,7 @@ def ranking_fingerprint(
         "implementation": _source_digest([
             "ranker/listwise.py", "ranker/debate.py", "ranker/reranker.py",
             "ranker/fusion.py", "evaluator/profile.py", "collector/utils.py",
+            "embeddings/indexer.py", "scripts/rank_jobs.py", "ranker/rank_cache.py",
         ]),
         "candidate_profile": candidate_profile,
         "questionnaire": questionnaire,

@@ -260,7 +260,6 @@ class TestItPracujSourceSearch:
         assert result.source_structured_data == {
             "remote": True,
             "remote_available": True,
-            "remote_regions": ["Poland"],
         }
         assert src.search("PHP", "Poland", known_urls={"https://www.pracuj.pl/praca/remote,oferta,1/"}) == []
 
@@ -279,7 +278,7 @@ class TestItPracujSourceSearch:
         data = results[0].source_structured_data
         assert data["remote"] is True
         assert data["remote_available"] is True
-        assert data["remote_regions"] == ["Poland"]
+        assert "remote_regions" not in data
         assert data["seniority"] == "senior"
         assert data["salary_min"] == 120
         assert data["salary_max"] == 150

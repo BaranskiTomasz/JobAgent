@@ -1,6 +1,8 @@
 import logging
 from collector.utils import build_excerpt
 from embeddings.client import VoyageClient
+from embeddings.client import voyage_retryable_errors
+from ranker.retry import call_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +47,11 @@ def rerank_jobs(jobs: list[dict], query: str, top_k: int = 20) -> list[dict]:
         documents.append(f"{job['title']} at {job['company']}\n{desc}")
 
     try:
-        results = client.rerank(query=query_text, documents=documents, top_k=min(top_k, len(documents)))
+        results = call_with_retry(
+            lambda: client.rerank(query=query_text, documents=documents, top_k=min(top_k, len(documents))),
+            label="Voyage rerank",
+            retryable_errors=voyage_retryable_errors(),
+        )
     except Exception as e:
         logger.error(f"Voyage rerank failed: {e}, falling back to embedding order")
         for job in jobs:

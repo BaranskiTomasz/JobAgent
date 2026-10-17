@@ -14,12 +14,25 @@ Test scenarios:
 """
 import os
 import uuid
+from unittest.mock import patch
 
 import pytest
 
 from db.repositories import job_repository, criteria_repository, cv_repository
 from collector.filters import apply_keyword_filter
 from evaluator.runner import run as run_evaluator
+from extractor.runner import FACT_SCHEMA_VERSION
+from tests.conftest import TEST_AUTOMATION_API_KEY
+
+
+def _mark_extracted(job_id: str) -> None:
+    """The scoring feed now requires a non catalog_gate job_fact_extractions
+    row (see jobs_repo._personal_extraction_eligibility_sql in JobAgentWeb),
+    matching the real pipeline where extraction always runs before scoring.
+    PUT /{job_id}/facts is automation-only, so the key is patched in just for
+    this one call, see tests/conftest.py's TEST_AUTOMATION_API_KEY."""
+    with patch("api_client.JOBAGENT_API_KEY", TEST_AUTOMATION_API_KEY):
+        job_repository.update_facts(job_id, FACT_SCHEMA_VERSION, "test-model", "test-hash", {"remote": True}, {}, catalog=True)
 
 
 # ---------------------------------------------------------------------------
@@ -256,24 +269,28 @@ class TestE2Filter:
 class TestE3Scoring:
     def test_great_linkedin_job_scores_high(self):
         job_id = job_repository.insert(**_JOB_E3_LINKEDIN_GREAT)
+        _mark_extracted(job_id)
         run_evaluator()
         score = _get_job_score(job_id)
         assert score >= 7, f"Expected score >= 7 for great LinkedIn job, got {score}"
 
     def test_poor_linkedin_job_scores_low(self):
         job_id = job_repository.insert(**_JOB_E3_LINKEDIN_POOR)
+        _mark_extracted(job_id)
         run_evaluator()
         score = _get_job_score(job_id)
         assert score <= 4, f"Expected score <= 4 for poor LinkedIn job, got {score}"
 
     def test_great_remoteok_job_scores_high(self):
         job_id = job_repository.insert(**_JOB_E3_REMOTEOK_GREAT)
+        _mark_extracted(job_id)
         run_evaluator()
         score = _get_job_score(job_id)
         assert score >= 7, f"Expected score >= 7 for great RemoteOK job, got {score}"
 
     def test_poor_remoteok_job_scores_low(self):
         job_id = job_repository.insert(**_JOB_E3_REMOTEOK_POOR)
+        _mark_extracted(job_id)
         run_evaluator()
         score = _get_job_score(job_id)
         assert score <= 4, f"Expected score <= 4 for poor RemoteOK job, got {score}"

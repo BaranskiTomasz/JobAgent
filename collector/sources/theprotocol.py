@@ -359,7 +359,6 @@ class TheProtocolSource(JobSource):
                 source_data = {
                     "remote": True,
                     "remote_available": True,
-                    "remote_regions": ["Poland"],
                 }
             
             # Merge listing-level structured data

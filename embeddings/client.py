@@ -5,6 +5,16 @@ from config import VOYAGE_API_KEY, VOYAGE_EMBED_MODEL, VOYAGE_RERANK_MODEL
 logger = logging.getLogger(__name__)
 
 
+def voyage_retryable_errors() -> tuple[type[Exception], ...]:
+    """Return the Voyage SDK's typed transient failures without importing it at startup."""
+    try:
+        from voyageai.error import APIConnectionError, RateLimitError, ServiceUnavailableError, Timeout
+    except ImportError:
+        return ()
+
+    return APIConnectionError, RateLimitError, ServiceUnavailableError, Timeout
+
+
 def _require_voyage():
     if not VOYAGE_API_KEY:
         raise RuntimeError("VOYAGE_API_KEY not set, add it to .env to use embedding/rerank features.")

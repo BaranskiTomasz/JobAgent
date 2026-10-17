@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+from voyageai.error import RateLimitError
+
 from ranker.reranker import rerank_jobs, _MAX_QUERY_CHARS
 
 
@@ -209,6 +211,24 @@ class TestRerankJobs:
             result = rerank_jobs(jobs, "query")
 
         assert result[0]["rerank_score"] == 0.42
+
+    @patch("ranker.retry.time.sleep")
+    def test_retries_typed_transient_error_then_succeeds(self, mock_sleep):
+        jobs = [_job("j1")]
+        with patch("ranker.reranker._get_client") as mock_get:
+            mock_client = MagicMock()
+            mock_client.rerank.side_effect = [
+                RateLimitError("rate limited"),
+                [{"index": 0, "score": 0.9}],
+            ]
+            mock_get.return_value = mock_client
+
+            result = rerank_jobs(jobs, "query")
+
+        assert result[0]["rerank_score"] == 0.9
+        assert "_rerank_unreliable" not in result[0]
+        assert mock_client.rerank.call_count == 2
+        mock_sleep.assert_called_once()
 
     def test_respects_top_k_limit(self):
         jobs = [_job(f"j{i}") for i in range(5)]

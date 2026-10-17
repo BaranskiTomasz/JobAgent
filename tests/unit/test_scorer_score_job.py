@@ -1,5 +1,8 @@
 from unittest.mock import MagicMock, patch
 
+import anthropic
+import httpx
+
 from evaluator.scorer import score_job
 
 
@@ -28,6 +31,18 @@ def _tool_response(stop_reason="tool_use", **input_overrides):
     response.stop_reason = stop_reason
     response.usage = MagicMock(input_tokens=100, output_tokens=50, cache_creation_input_tokens=0, cache_read_input_tokens=0)
     return response
+
+
+def _request():
+    return httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+
+
+def _internal_server_error():
+    return anthropic.InternalServerError("overloaded", response=httpx.Response(529, request=_request()), body=None)
+
+
+def _bad_request_error():
+    return anthropic.BadRequestError("invalid request", response=httpx.Response(400, request=_request()), body=None)
 
 
 class TestScoreJobStructuredResult:
@@ -96,3 +111,30 @@ class TestScoreJobStructuredResult:
         assert result["score"] is None
         assert "API error" in result["score_reason"]
         assert result["breakdown"] is None
+
+    @patch("ranker.retry.time.sleep")
+    @patch("evaluator.scorer._get_client")
+    def test_retries_typed_overloaded_error_then_succeeds(self, mock_get_client, mock_sleep):
+        mock_get_client.return_value.messages.create.side_effect = [_internal_server_error(), _tool_response()]
+
+        assert score_job(_job(), "system prompt")["score"] == 7.5
+        assert mock_get_client.return_value.messages.create.call_count == 2
+        mock_sleep.assert_called_once()
+
+    @patch("ranker.retry.time.sleep")
+    @patch("evaluator.scorer._get_client")
+    def test_keeps_legacy_overloaded_message_retry(self, mock_get_client, mock_sleep):
+        mock_get_client.return_value.messages.create.side_effect = [Exception("service overloaded"), _tool_response()]
+
+        assert score_job(_job(), "system prompt")["score"] == 7.5
+        assert mock_get_client.return_value.messages.create.call_count == 2
+        mock_sleep.assert_called_once()
+
+    @patch("ranker.retry.time.sleep")
+    @patch("evaluator.scorer._get_client")
+    def test_does_not_retry_non_transient_api_error(self, mock_get_client, mock_sleep):
+        mock_get_client.return_value.messages.create.side_effect = _bad_request_error()
+
+        assert score_job(_job(), "system prompt")["score"] is None
+        assert mock_get_client.return_value.messages.create.call_count == 1
+        mock_sleep.assert_not_called()

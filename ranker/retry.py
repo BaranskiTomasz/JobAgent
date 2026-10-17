@@ -13,17 +13,26 @@ logger = logging.getLogger(__name__)
 _RETRYABLE = (anthropic.APIConnectionError, anthropic.APITimeoutError, anthropic.RateLimitError, anthropic.InternalServerError)
 
 
-def call_with_retry(fn, *, label: str, max_attempts: int = 3, base_delay: float = 30):
+def call_with_retry(
+    fn,
+    *,
+    label: str,
+    max_attempts: int = 3,
+    base_delay: float = 30,
+    retryable_errors: tuple[type[Exception], ...] = _RETRYABLE,
+    retry_if=None,
+):
     # Retries a transient failure with linear backoff (base_delay,
     # 2*base_delay, ...); raises immediately for a non-transient error, or
-    # the last exception once every attempt is exhausted. Used by
-    # ranker/listwise.py and ranker/debate.py, the most expensive calls in
-    # the pipeline, so a single transient hiccup doesn't fall straight
-    # through to their degraded fallback.
+    # the last exception once every attempt is exhausted. The default typed
+    # errors are Anthropic's; callers can pass another provider's equivalent
+    # transient error types while keeping the same retry behavior.
     for attempt in range(max_attempts):
         try:
             return fn()
-        except _RETRYABLE as e:
+        except Exception as e:
+            if not isinstance(e, retryable_errors) and not (retry_if and retry_if(e)):
+                raise
             if attempt == max_attempts - 1:
                 raise
             wait = base_delay * (attempt + 1)

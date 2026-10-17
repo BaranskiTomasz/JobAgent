@@ -1,7 +1,11 @@
 import json
 import uuid
+from unittest.mock import patch
 
+import api_client
 from db.repositories import job_repository
+from extractor.runner import FACT_SCHEMA_VERSION
+from tests.conftest import TEST_AUTOMATION_API_KEY
 
 
 def _unique_url(url: str) -> str:
@@ -18,6 +22,19 @@ def _insert(url="https://example.com/job/1", **kwargs):
                     location="Poland", source="linkedin",
                     description="Symfony experience required.")
     return job_repository.insert(**{**defaults, "url": _unique_url(url), **kwargs})
+
+
+def _mark_extracted(job_id: str) -> None:
+    """The personal scoring/ranking feeds now require a non catalog_gate
+    job_fact_extractions row (see jobs_repo._personal_extraction_eligibility_sql
+    in JobAgentWeb), matching the real pipeline where extraction always runs
+    before scoring. Tests asserting a job appears in those feeds need to
+    simulate that extraction step. PUT /{job_id}/facts is automation-only
+    (require_automation_client), so the API key is patched in just for this one
+    call rather than for the whole test, see tests/conftest.py's
+    TEST_AUTOMATION_API_KEY for why it must not leak into every other request."""
+    with patch("api_client.JOBAGENT_API_KEY", TEST_AUTOMATION_API_KEY):
+        job_repository.update_facts(job_id, FACT_SCHEMA_VERSION, "test-model", "test-hash", {"remote": True}, {}, catalog=True)
 
 
 class TestInsert:
@@ -115,6 +132,7 @@ class TestGetQueryOutcomeStats:
 class TestGetUnscored:
     def test_returns_job_with_description(self):
         job_id = _insert()
+        _mark_extracted(job_id)
         ids = [j["id"] for j in job_repository.get_unscored()]
         assert job_id in ids
 
@@ -357,6 +375,7 @@ class TestGetNew:
 class TestGetNewWithDescriptions:
     def test_returns_new_jobs_with_descriptions(self):
         id1 = _insert(url="https://a.com/1")
+        _mark_extracted(id1)
         job_repository.insert("No desc", "Co", "PL", _unique_url("https://a.com/nd"), "linkedin")
         result = job_repository.get_new_with_descriptions()
         ids = [r["id"] for r in result]
@@ -528,6 +547,7 @@ class TestGetWouldApplyStats:
 class TestGetJobsForRanking:
     def test_returns_new_jobs_without_listwise_rank(self):
         id1 = _insert(url="https://a.com/1")
+        _mark_extracted(id1)
         result = job_repository.get_jobs_for_ranking()
         ids = [r["id"] for r in result]
         assert id1 in ids
@@ -535,6 +555,7 @@ class TestGetJobsForRanking:
     def test_includes_already_ranked_jobs(self):
         """The whole active pool is re-ranked every run, not just newly-arrived jobs."""
         id1 = _insert(url="https://a.com/1")
+        _mark_extracted(id1)
         job_repository.update_ranking_scores(id1, None, None, listwise_rank=1)
         result = job_repository.get_jobs_for_ranking()
         ids = [r["id"] for r in result]

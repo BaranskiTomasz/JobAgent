@@ -349,7 +349,6 @@ class ItPracujSource(JobSource):
                 source_data = {
                     "remote": True,
                     "remote_available": True,
-                    "remote_regions": ["Poland"],
                 }
 
             listing_structured = _extract_source_structured_data(group)

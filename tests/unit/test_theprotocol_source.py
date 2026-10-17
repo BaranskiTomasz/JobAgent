@@ -278,7 +278,6 @@ class TestTheProtocolSourceSearch:
         assert result.source_structured_data == {
             "remote": True,
             "remote_available": True,
-            "remote_regions": ["Poland"],
         }
         assert src.search("PHP", "Poland", known_urls={result.url + "/?utm=career"}) == []
 
@@ -786,7 +785,7 @@ class TestSearchStructuredData:
         assert len(results) == 1
         assert results[0].source_structured_data["remote"] is True
         assert results[0].source_structured_data["remote_available"] is True
-        assert results[0].source_structured_data["remote_regions"] == ["Poland"]
+        assert "remote_regions" not in results[0].source_structured_data
         assert results[0].source_structured_data["seniority"] == "senior"
 
     def test_all_structured_data_fields_combined(self):
@@ -817,7 +816,7 @@ class TestSearchStructuredData:
         data = results[0].source_structured_data
         assert data["remote"] is True
         assert data["remote_available"] is True
-        assert data["remote_regions"] == ["Poland"]
+        assert "remote_regions" not in data
         assert data["seniority"] == "senior"
         assert data["salary_min"] == 22000
         assert data["salary_max"] == 26000

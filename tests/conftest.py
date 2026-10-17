@@ -41,6 +41,46 @@ _JOBAGENTWEB_PYTHON = next(
     None,
 )
 
+# A fixed automation identity for tests that need to call an endpoint gated by
+# require_automation_client (e.g. PUT /{job_id}/facts, only ever called by the
+# real JobAgent pipeline via api_client's X-JobAgent-Api-Key header, see
+# JobAgentWeb's deps.py). The key is only ever attached per-call by patching
+# api_client.JOBAGENT_API_KEY for the duration of that one call (see
+# tests/integration/test_job_repository.py's _mark_extracted for the pattern)
+# precisely so it never leaks into every other test's requests, which would
+# otherwise silently authenticate them all as this one fixed user instead of
+# each test's own freshly registered one.
+TEST_AUTOMATION_API_KEY = "test-automation-key-923nf"
+_AUTOMATION_USERNAME = "jobagent-test-automation-user"
+
+
+def _bootstrap_automation_user(postgres_env: dict) -> str:
+    """Runs schema init + a get-or-create user insert directly against Postgres
+    via JobAgentWeb's own venv and repo code (db.py/users_repo.py/security.py),
+    before the long-lived test server subprocess starts. JOBAGENT_API_KEY_USER_ID
+    is read once at that subprocess's startup, so the id must exist beforehand."""
+    script = (
+        "import migrations, users_repo, security, db\n"
+        "conn = db.psycopg2.connect(host=db.POSTGRES['host'], port=db.POSTGRES['port'], "
+        "dbname=db.POSTGRES['dbname'], user=db.POSTGRES['user'], password=db.POSTGRES['password'])\n"
+        "migrations.init_db(conn)\n"
+        f"existing = users_repo.get_by_username(conn, {_AUTOMATION_USERNAME!r})\n"
+        "if existing:\n"
+        "    print(existing['id'])\n"
+        "else:\n"
+        f"    uid = users_repo.create(conn, {_AUTOMATION_USERNAME!r}, security.hash_password('unused'))\n"
+        "    conn.commit()\n"
+        "    print(uid)\n"
+    )
+    result = subprocess.run(
+        [str(_JOBAGENTWEB_PYTHON), "-c", script],
+        cwd=str(_JOBAGENTWEB_REPO), env=postgres_env,
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        pytest.exit(f"Failed to bootstrap test automation user:\n{result.stderr}", returncode=1)
+    return result.stdout.strip().splitlines()[-1]
+
 
 @pytest.fixture(scope="session", autouse=True)
 def jobagentweb_server():
@@ -64,6 +104,8 @@ def jobagentweb_server():
         "POSTGRES_PASSWORD": os.environ.get("POSTGRES_PASSWORD", "test_only_pw_923nf"),
         "SESSION_HTTPS_ONLY": "false",
     })
+    env["JOBAGENT_API_KEY"] = TEST_AUTOMATION_API_KEY
+    env["JOBAGENT_API_KEY_USER_ID"] = _bootstrap_automation_user(env)
     # A pipe that nobody drains fills up (uvicorn logs a line per request) and the
     # child then blocks on its own stdout write() forever, the whole test run
     # freezes mid-suite with no error, just an unresponsive server. Redirect to a

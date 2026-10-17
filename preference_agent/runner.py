@@ -11,6 +11,7 @@ from db.repositories import job_repository, preference_repository, dismissed_ite
 from db.repositories.usage_repository import log_anthropic
 from evaluator.profile import load_questionnaire_preferences
 from preference_agent.profile import _DISTILL_TOOL, render_signals
+from ranker.retry import call_with_retry
 
 _SYSTEM = """\
 You distill job application history into a structured preference profile consumed by another AI evaluator.
@@ -241,13 +242,16 @@ def run() -> dict:
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     try:
-        response = client.messages.create(
-            model=CLAUDE_DISTILL_MODEL,
-            max_tokens=4000,
-            system=_SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
-            tools=[_DISTILL_TOOL],
-            tool_choice={"type": "tool", "name": "submit_profile"},
+        response = call_with_retry(
+            lambda: client.messages.create(
+                model=CLAUDE_DISTILL_MODEL,
+                max_tokens=4000,
+                system=_SYSTEM,
+                messages=[{"role": "user", "content": prompt}],
+                tools=[_DISTILL_TOOL],
+                tool_choice={"type": "tool", "name": "submit_profile"},
+            ),
+            label="Preference distillation",
         )
     except Exception as e:
         logger.error(f"API error: {e}")

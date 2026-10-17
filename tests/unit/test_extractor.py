@@ -1,6 +1,9 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import anthropic
+import httpx
+
 from extractor.runner import (
     _CATALOG_GATE_TOOL,
     _EXTRACT_TOOL,
@@ -45,6 +48,68 @@ def test_extract_job_returns_parsed_dict(mock_get_client):
     assert result["remote"] is True
     assert result["seniority"] == "senior"
     assert "Python" in result["stack"]
+
+
+@patch("ranker.retry.time.sleep")
+@patch("extractor.runner._get_client")
+def test_extract_job_retries_transient_api_error_then_succeeds(mock_get_client, mock_sleep):
+    payload = {"remote": True, "seniority": "senior"}
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    transient_error = anthropic.APITimeoutError(request=request)
+    mock_get_client.return_value.messages.create.side_effect = [
+        transient_error,
+        _make_tool_response(payload),
+    ]
+
+    result = extract_job("Senior Python Developer, remote")
+
+    assert result["remote"] is True
+    assert mock_get_client.return_value.messages.create.call_count == 2
+    mock_sleep.assert_called_once()
+
+
+@patch("extractor.runner._get_client")
+def test_extract_job_marks_explicit_dealbreaker_facts_high_confidence(mock_get_client):
+    payload = {
+        "remote": True,
+        "hybrid": False,
+        "remote_regions": ["United States"],
+        "salary_max": 100000,
+        "salary_currency": "USD",
+        "salary_period": "yearly",
+        "seniority": "junior",
+        "evidence": {
+            "remote": "Remote, US only",
+            "remote_regions": "US only",
+            "salary_max": "$100,000 per year",
+            "seniority": "Junior Software Engineer",
+        },
+    }
+    mock_get_client.return_value.messages.create.return_value = _make_tool_response(payload)
+
+    result = extract_job("Remote, US only. Junior Software Engineer. $100,000 per year.")
+
+    assert result["_field_confidence"] == {
+        "remote": "high", "hybrid": "medium", "remote_regions": "high",
+        "salary_max": "high", "salary_currency": "high", "salary_period": "high",
+        "seniority": "high",
+    }
+
+
+@patch("extractor.runner._get_client")
+def test_extract_job_keeps_unsupported_dealbreaker_facts_medium_confidence(mock_get_client):
+    mock_get_client.return_value.messages.create.return_value = _make_tool_response({
+        "remote": False,
+        "hybrid": True,
+        "seniority": "junior",
+        "evidence": {},
+    })
+
+    result = extract_job("A software engineering role.")
+
+    assert result["_field_confidence"] == {
+        "remote": "medium", "hybrid": "medium", "seniority": "medium",
+    }
 
 
 @patch("extractor.runner._get_client")

@@ -190,11 +190,12 @@ class TestEmbedWithRetry:
         assert result == [[0.1, 0.2]]
         assert mock_client.embed.call_count == 1
 
-    @patch("embeddings.indexer.time.sleep")
+    @patch("ranker.retry.time.sleep")
     def test_retries_on_rate_limit_error(self, mock_sleep):
+        from voyageai.error import RateLimitError
         mock_client = MagicMock()
         mock_client.embed.side_effect = [
-            Exception("rate limit exceeded"),
+            RateLimitError("rate limit exceeded"),
             [[0.5, 0.6]],
         ]
         result = _embed_with_retry(mock_client, ["text"])
@@ -202,11 +203,12 @@ class TestEmbedWithRetry:
         assert mock_client.embed.call_count == 2
         mock_sleep.assert_called_once()
 
-    @patch("embeddings.indexer.time.sleep")
-    def test_retries_on_429_error(self, mock_sleep):
+    @patch("ranker.retry.time.sleep")
+    def test_retries_on_service_unavailable_error(self, mock_sleep):
+        from voyageai.error import ServiceUnavailableError
         mock_client = MagicMock()
         mock_client.embed.side_effect = [
-            Exception("HTTP 429 too many requests"),
+            ServiceUnavailableError("HTTP 503 service unavailable"),
             [[0.3]],
         ]
         result = _embed_with_retry(mock_client, ["text"])
