@@ -43,14 +43,14 @@ JobAgent is a local, single-user client with **no database of its own** — ever
 │          │                                                              │
 │  5. Embed (Voyage)        ← 1024-dim vector per job                    │
 │          │                                                              │
-│  6. Semantic retrieval    ← ideal vector = centroid(applied)           │
-│          │                   − 0.3 × centroid(rejected)                │
+│  6. Semantic retrieval    ← max-sim(applied)                            │
+│          │                   − 0.3 × max-sim(rejected)                  │
 │          │                                                              │
 │  7. Cross-encoder rerank  ← Voyage rerank-2: top-50 → top-20          │
 │          │                                                              │
-│  8. Listwise rank (Opus)  ← extended thinking, orders top-20          │
+│  8. Listwise rank (Opus)  ← extended thinking, orders ~20–23 jobs     │
 │          │                                                              │
-│  9. Debate / second opinion ← different model critiques the top-20,   │
+│  9. Debate / second opinion ← different model critiques ~20–23 jobs,  │
 │                                 demotes anything flagged dealbreaker_risk│
 └──────────────────────────────┬──────────────────────────────────────────┘
                                │ scored + ranked jobs
@@ -72,7 +72,7 @@ JobAgent currently collects from 19 source integrations:
 |-------|---------|
 | Broad market | LinkedIn |
 | International remote boards | Remotive, Remote OK, Working Nomads, We Work Remotely, Himalayas, Jobicy, JobsCollider, Arbeitnow Europe, Arbeitnow UK |
-| Direct company career boards | Greenhouse, Lever, Ashby — backed by a registry of 200 technology companies |
+| Direct company career boards | Greenhouse, Lever, Ashby — backed by a registry of 187 technology companies |
 | Community listings | Hacker News “Who is hiring?” |
 | Poland-focused boards | justjoin.it, theprotocol.it, it.pracuj.pl, NoFluffJobs, SOLID.Jobs |
 
@@ -465,6 +465,8 @@ Each source run records a collection funnel from upstream candidates through que
 
 Material values carry evidence and provenance. Source-native API values override text extraction, deterministic normalization maps aliases such as `Node.js` to `nodejs`, and derived PL/BG eligibility remains distinguishable from explicit source data. The extraction request treats posting text as untrusted content and ignores instructions embedded in it.
 
+For dealbreaker fields, an LLM-extracted value is high-confidence only when its response includes a non-empty verbatim supporting span; otherwise it remains lower-confidence and the fail-open dealbreaker filter does not enforce it.
+
 Example compatibility fields:
 ```json
 {
@@ -519,12 +521,13 @@ Output (`submit_score` tool):
 
 Each job is embedded as: `"{title} at {company}\n{description[:2000]}"` with `input_type="document"`. Vectors are stored via JobAgentWeb's shared `job_embeddings` table — computed once per posting, reused by every user.
 
-The **ideal candidate vector** is computed from your feedback:
+With applied-job history, each candidate job is scored from your feedback as:
 ```
-ideal = centroid(applied_embeddings) − 0.3 × centroid(rejected_embeddings)
+score(job) = max_similarity(job, applied_embeddings)
+             − 0.3 × max_similarity(job, rejected_embeddings)
 ```
 
-The 0.3 weight on rejected embeddings pushes the ideal vector away from job types you've rejected without over-correcting. Falls back to embedding the CV summary when there's no applied-job history yet, so a new candidate's first run still gets semantic ranking instead of arbitrary scrape-recency order. Each new job is scored by cosine similarity to this vector → stored as `embedding_score`.
+The 0.3 rejected-similarity penalty pushes results away from job types you've rejected without over-correcting. Falls back to embedding the CV summary when there's no applied-job history yet, so a new candidate's first run still gets semantic ranking instead of arbitrary scrape-recency order. Each new job's retrieval score is stored as `embedding_score`.
 
 #### 7. Cross-encoder rerank
 
@@ -536,7 +539,7 @@ Top-50 jobs by `embedding_score` are passed to the cross-encoder with a query de
 
 `ranker/listwise.py` — **Claude Opus 4.8** with extended thinking (`adaptive` mode, `effort=high`).
 
-The top-20 jobs from the reranker are passed together in a single prompt. Opus sees all 20 simultaneously and ranks them relative to each other — not by absolute score. This is the key advantage over pairwise scoring: Opus can reason about trade-offs across the full set.
+The top-20 jobs from the reranker are passed together in a single prompt; on exploration days, up to three jobs from outside that pool are appended. Opus therefore sees roughly 20–23 jobs simultaneously and ranks them relative to each other — not by absolute score. This is the key advantage over pairwise scoring: Opus can reason about trade-offs across the full set.
 
 Output format — JSON in `<ranking>` tags:
 ```json
@@ -547,13 +550,13 @@ Output format — JSON in `<ranking>` tags:
 ]
 ```
 
-Each job gets a `listwise_rank` (1 = best) and `rank_reason`. Jobs outside the top-20 are not ranked (NULL).
+Each job gets a `listwise_rank` (1 = best) and `rank_reason`. Jobs outside the base top-20 and any appended exploration slots are not ranked (NULL).
 
 Extended thinking lets Opus internally reason about candidate-job fit before committing to an ordering. This produces more consistent rankings than a simple prompt.
 
 #### 9. Debate / second opinion
 
-`ranker/debate.py::debate_rank()` — runs with **Claude Sonnet 4.6** (deliberately a different model from the Opus listwise ranker) over just the top-20 shortlist, right after listwise ranking.
+`ranker/debate.py::debate_rank()` — runs with **Claude Sonnet 4.6** (deliberately a different model from the Opus listwise ranker) over the 20-job shortlist plus any appended exploration slots, right after listwise ranking.
 
 The critic sees the current order plus each job's `rank_reason` and `score_breakdown` (pros/cons), and does **not** re-rank from scratch — it only flags disagreements it feels strongly about, via `submit_debate_review`:
 

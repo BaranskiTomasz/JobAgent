@@ -74,7 +74,7 @@ def location_matches(job_location: str, search_location: str) -> bool:
         or bool(re.search(r"(?<![a-z])eu(?![a-z])", job_required_location))
     ):
         return True
-    if normalized_search in _EU_COUNTRIES and any(t in job_required_location for t in _EU_TIMEZONE_TOKENS):
+    if normalized_search in _EU_COUNTRIES and any(contains(t) for t in _EU_TIMEZONE_TOKENS):
         return True
     if normalized_search in ("united states", "canada") and any(t in job_required_location for t in _NA_TOKENS):
         return True

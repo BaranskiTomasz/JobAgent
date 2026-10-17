@@ -32,6 +32,7 @@ def _make_ranking_response(ranking: list[dict]):
     response = MagicMock()
     response.content = [block]
     response.usage = MagicMock(input_tokens=100, output_tokens=50, cache_creation_input_tokens=0, cache_read_input_tokens=0)
+    response.stop_reason = "end_turn"
     return response
 
 
@@ -290,6 +291,19 @@ def test_listwise_rank_fallback_on_unparseable_json(mock_anthropic):
     result = listwise_rank(jobs, "", [])
     assert result[0]["listwise_rank"] == 1
     assert result[0]["rank_reason"] == FALLBACK_RANK_REASON
+
+
+@patch("ranker.listwise.anthropic.Anthropic")
+def test_listwise_rank_falls_back_on_truncated_parseable_response(mock_anthropic):
+    jobs = [_job("j1"), _job("j2")]
+    response = _make_ranking_response([{"job_id": "j2", "reason": "Would otherwise parse"}])
+    response.stop_reason = "max_tokens"
+    mock_anthropic.return_value.messages.create.return_value = response
+
+    result = listwise_rank(jobs, "", [])
+
+    assert [job["id"] for job in result] == ["j1", "j2"]
+    assert all(job["rank_reason"] == FALLBACK_RANK_REASON for job in result)
 
 
 def test_listwise_rank_empty_input():

@@ -220,6 +220,10 @@ Include ALL {len(jobs)} jobs. No text after the closing </ranking> tag."""
 
     log_anthropic(response, "ranker", CLAUDE_RANK_MODEL)
 
+    if response.stop_reason == "max_tokens":
+        logger.error("Opus listwise response truncated (max_tokens)")
+        return _fallback_ranking(jobs)
+
     text_block = next((b for b in response.content if b.type == "text"), None)
     if not text_block:
         logger.error("No text block in Opus listwise response")

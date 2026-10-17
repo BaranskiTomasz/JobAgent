@@ -31,6 +31,11 @@ def test_eu_token_matches_supported_country():
     assert location_matches("EU only", "Bulgaria")
 
 
+def test_timezone_matches_as_a_word_token_only():
+    assert location_matches("Remote, CET working hours", "Poland")
+    assert not location_matches("Remote, weekly spreadsheet review", "Poland")
+
+
 def test_explicit_country_exclusion_overrides_broad_region():
     assert not location_matches("Worldwide except Poland", "Poland")
     assert not location_matches("Europe excluding Bulgaria", "Bulgaria")
