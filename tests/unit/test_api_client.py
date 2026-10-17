@@ -129,3 +129,55 @@ class TestRequestWithSessionCookie:
         with patch.object(api_client._client, "request", return_value=_mock_response(status_code=401)):
             with pytest.raises(api_client.NotLoggedInError, match="scripts/login.py"):
                 api_client.request("GET", "/api/jobs/stats")
+
+
+class TestRetryOnTransientFailure:
+    def test_retries_transport_error_then_succeeds(self, monkeypatch):
+        monkeypatch.setattr(api_client, "JOBAGENT_API_KEY", "my-secret-key")
+        monkeypatch.setattr(api_client.time, "sleep", lambda _: None)
+        with patch.object(
+            api_client._client, "request",
+            side_effect=[api_client.httpx.ConnectError("boom"), _mock_response()],
+        ) as mock_request:
+            api_client.request("GET", "/api/jobs/stats")
+        assert mock_request.call_count == 2
+
+    def test_exhausting_transport_error_retries_raises(self, monkeypatch):
+        monkeypatch.setattr(api_client, "JOBAGENT_API_KEY", "my-secret-key")
+        monkeypatch.setattr(api_client.time, "sleep", lambda _: None)
+        with patch.object(
+            api_client._client, "request", side_effect=api_client.httpx.ConnectError("boom"),
+        ):
+            with pytest.raises(api_client.httpx.ConnectError):
+                api_client.request("GET", "/api/jobs/stats")
+
+    def test_retries_502_then_succeeds(self, monkeypatch):
+        # A deploy/restart on the server briefly returns 502 through the proxy,
+        # a real response (not a TransportError), but still worth retrying.
+        monkeypatch.setattr(api_client, "JOBAGENT_API_KEY", "my-secret-key")
+        monkeypatch.setattr(api_client.time, "sleep", lambda _: None)
+        with patch.object(
+            api_client._client, "request",
+            side_effect=[_mock_response(status_code=502), _mock_response()],
+        ) as mock_request:
+            api_client.request("GET", "/api/jobs/stats")
+        assert mock_request.call_count == 2
+
+    def test_exhausting_502_retries_raises_api_error(self, monkeypatch):
+        monkeypatch.setattr(api_client, "JOBAGENT_API_KEY", "my-secret-key")
+        monkeypatch.setattr(api_client.time, "sleep", lambda _: None)
+        with patch.object(
+            api_client._client, "request", return_value=_mock_response(status_code=502),
+        ):
+            with pytest.raises(api_client.ApiError) as excinfo:
+                api_client.request("GET", "/api/jobs/stats")
+        assert excinfo.value.status_code == 502
+
+    def test_404_is_not_retried(self, monkeypatch):
+        monkeypatch.setattr(api_client, "JOBAGENT_API_KEY", "my-secret-key")
+        with patch.object(
+            api_client._client, "request", return_value=_mock_response(status_code=404),
+        ) as mock_request:
+            with pytest.raises(api_client.ApiError):
+                api_client.request("GET", "/api/jobs/stats")
+        assert mock_request.call_count == 1

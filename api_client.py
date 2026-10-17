@@ -115,14 +115,19 @@ def request(method: str, path: str, **kwargs):
         _client.cookies.clear()
         _client.cookies.set("session", cookie)
 
+    # 502/503/504 means a real response reached us (not a TransportError) but
+    # the backend itself was briefly unavailable (deploy, restart) - also
+    # worth a retry, unlike any other 4xx/5xx which is a real error.
     last_error = None
     for attempt in range(3):
         try:
             resp = _client.request(method, path, **kwargs)
-            break
+            if resp.status_code not in (502, 503, 504):
+                break
+            last_error = ApiError(resp.status_code, resp.text)
         except httpx.TransportError as e:
             last_error = e
-            time.sleep(0.5 * (attempt + 1))
+        time.sleep(0.5 * (attempt + 1))
     else:
         raise last_error
 
