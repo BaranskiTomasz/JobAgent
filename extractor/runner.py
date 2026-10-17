@@ -432,6 +432,11 @@ def _merge_source_structured_data(data: dict, job: dict) -> dict:
 
 def _normalize_facts(data: dict) -> dict:
     normalized = dict(data)
+    # The extraction model occasionally returns a nested object instead of a plain
+    # string for a stack entry; drop those immediately so every downstream use
+    # (skill synthesis below, dict.fromkeys dedup) only ever sees strings.
+    for key in ("stack", "stack_required", "stack_preferred"):
+        normalized[key] = [item for item in (normalized.get(key) or []) if isinstance(item, str)]
     remote_available = normalized.get("remote_available")
     if remote_available is None:
         remote_available = normalized.get("remote")

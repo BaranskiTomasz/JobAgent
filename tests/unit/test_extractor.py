@@ -495,6 +495,17 @@ def test_normalize_facts_removes_unknown_summary_sentinel():
     assert _normalize_facts({"summary": "<UNKNOWN>"})["summary"] == ""
 
 
+def test_normalize_facts_drops_non_string_stack_entries_instead_of_crashing():
+    result = _normalize_facts({
+        "stack": ["Python", {"name": "Go", "level": "expert"}],
+        "stack_required": [{"name": "Python"}],
+        "stack_preferred": ["Kotlin"],
+    })
+    assert result["stack"] == ["Python", "python"]
+    assert result["stack_required"] == []
+    assert result["stack_preferred"] == ["Kotlin"]
+
+
 def test_normalize_facts_derives_poland_and_bulgaria_from_eu_remote():
     result = _normalize_facts({
         "remote": True, "remote_regions": ["European Union"], "contract_types": ["b2b"],

@@ -33,7 +33,7 @@ def _reading_seconds(text: str) -> float:
 class LinkedInSource(JobSource):
     requires_stealth_pauses = True
 
-    def __init__(self, days_back: int = 7):
+    def __init__(self, days_back: int = 7, **_):
         self._days_back = days_back
         self._playwright = None
         self._browser = None
