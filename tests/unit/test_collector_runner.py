@@ -15,29 +15,8 @@ class TestLocationsForSource:
         countries = ["Poland", "Germany", "United Kingdom"]
         assert _locations_for_source("linkedin", countries, "Poland") == ["Poland"]
 
-    def test_remote_feed_uses_work_country_for_eligibility(self):
-        assert _locations_for_source("jobscollider", ["United States", "United Kingdom"], "Poland") == ["Poland"]
-
-    def test_worldwide_remote_sources_search_once_per_candidate_location(self):
-        # Regression: a single "Remote" search used to be an optimization, but
-        # collector/location.py's matching treats "Remote" as matching
-        # everything unconditionally, that made country selection a no-op
-        # for these 4 sources, silently letting e.g. "Remote, US only"
-        # through for a candidate who only selected Poland.
-        for source_id in (
-            "remotive", "remoteok", "workingnomads", "weworkremotely", "himalayas",
-            "jobicy", "jobscollider", "arbeitnow", "arbeitnow_uk",
-            "greenhouse", "lever", "ashby", "hackernews",
-        ):
-            assert _locations_for_source(source_id, ["Poland", "Germany", "Canada"]) == ["Poland", "Germany", "Canada"]
-
-    def test_worldwide_remote_source_falls_back_to_remote_when_no_countries_selected(self):
-        # No candidate country to check a job's disclosed location against,
-        # fall back to the unrestricted single "Remote" search.
-        assert _locations_for_source("remotive", []) == ["Remote"]
-
     def test_poland_only_source_returns_poland_when_selected(self):
-        assert _locations_for_source("justjoin", ["Germany", "Poland"]) == ["Poland"]
+        assert _locations_for_source("itpracuj", ["Germany", "Poland"]) == ["Poland"]
 
     def test_poland_only_source_returns_empty_when_poland_not_selected(self):
         assert _locations_for_source("theprotocol", ["Germany", "United Kingdom"]) == []
@@ -46,10 +25,10 @@ class TestLocationsForSource:
         assert _locations_for_source("itpracuj", ["Polska"]) == ["Poland"]
 
     def test_poland_only_source_case_insensitive(self):
-        assert _locations_for_source("nofluffjobs", ["POLAND"]) == ["Poland"]
+        assert _locations_for_source("itpracuj", ["POLAND"]) == ["Poland"]
 
     def test_poland_only_source_empty_country_list_returns_empty(self):
-        assert _locations_for_source("solidjobs", []) == []
+        assert _locations_for_source("theprotocol", []) == []
 
     def test_unknown_source_falls_back_to_full_country_list(self):
         countries = ["Poland", "France"]
@@ -58,10 +37,10 @@ class TestLocationsForSource:
     def test_poland_only_source_triggers_on_polish_hybrid_city(self):
         # A hybrid/onsite candidate never picks a country, only a city, so the
         # Polish boards must still activate for a known Polish city.
-        assert _locations_for_source("justjoin", ["Warsaw"]) == ["Poland"]
+        assert _locations_for_source("itpracuj", ["Warsaw"]) == ["Poland"]
 
     def test_poland_only_source_triggers_on_polish_city_with_diacritics(self):
-        assert _locations_for_source("nofluffjobs", ["Kraków"]) == ["Poland"]
+        assert _locations_for_source("theprotocol", ["Kraków"]) == ["Poland"]
 
     def test_poland_only_source_ignores_non_polish_city(self):
         assert _locations_for_source("theprotocol", ["Berlin"]) == []

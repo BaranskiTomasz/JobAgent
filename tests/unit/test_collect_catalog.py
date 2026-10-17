@@ -26,12 +26,12 @@ def test_catalog_query_rotation_wraps():
 def test_default_catalog_sources_exclude_linkedin():
     sources = catalog_sources()
     assert "linkedin" not in sources
-    assert "greenhouse" in sources
+    assert "itpracuj" in sources
 
 
 def test_catalog_rejects_explicit_linkedin_source():
     with pytest.raises(ValueError, match="linkedin"):
-        catalog_sources(["linkedin", "greenhouse"])
+        catalog_sources(["linkedin", "itpracuj"])
 
 
 def test_catalog_run_extracts_the_full_pending_backlog_not_just_current_run():

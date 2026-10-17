@@ -14,7 +14,7 @@ bp = Blueprint("candidate_preferences", __name__)
 
 _QUERY_DERIVE_PROMPT = """Based on this candidate's confirmed tech stack, role, and seniority,
 generate a short list of search phrases to use across multiple job boards (LinkedIn,
-justjoin.it, NoFluffJobs, and others).
+it.pracuj.pl, theprotocol.it, and others).
 
 Guidelines learned from real testing on LinkedIn:
 - A bare technology/language name alone (e.g. "PHP", "Python", "Go") usually finds more

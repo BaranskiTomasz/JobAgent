@@ -4,7 +4,10 @@ from datetime import datetime
 from collector.query_matcher import primary_query_token
 
 
-_TAG_SOURCES = {"jobicy"}
+# Sources that search by primary tag/token instead of the full query string.
+# Currently empty: jobicy, the only member, moved to JobAgentWeb's server-side
+# catalog collector along with the other non-browser sources.
+_TAG_SOURCES = set()
 
 
 @dataclass(frozen=True)

@@ -66,65 +66,30 @@ The candidate profile separates the country where work is performed from preferr
 
 ### Supported job sources
 
-JobAgent currently collects from 19 source integrations:
+JobAgent itself now only drives the 3 sources that require a real, authenticated or Cloudflare-gated browser session:
 
 | Group | Sources |
 |-------|---------|
 | Broad market | LinkedIn |
-| International remote boards | Remotive, Remote OK, Working Nomads, We Work Remotely, Himalayas, Jobicy, JobsCollider, Arbeitnow Europe, Arbeitnow UK |
-| Direct company career boards | Greenhouse, Lever, Ashby — backed by a registry of 187 technology companies |
-| Community listings | Hacker News “Who is hiring?” |
-| Poland-focused boards | justjoin.it, theprotocol.it, it.pracuj.pl, NoFluffJobs, SOLID.Jobs |
+| Poland-focused boards | theprotocol.it, it.pracuj.pl |
 
-International sources are filtered for remote roles that can be performed from the candidate's selected country. A generic “remote” label is not treated as worldwide eligibility: explicit restrictions such as US-only are rejected for a candidate working from Poland.
+The other 16 sources that used to live here (Remotive, Remote OK, Working Nomads, We Work Remotely, Himalayas, Jobicy, JobsCollider, Arbeitnow Europe, Arbeitnow UK, Greenhouse, Lever, Ashby, Hacker News "Who is hiring?", justjoin.it, NoFluffJobs, SOLID.Jobs) moved to JobAgentWeb's server-side daily catalog collector, since none of them need a browser and JobAgentWeb runs continuously instead of only on demand. See JobAgentWeb's `docs/catalog_collection.md` for that side of the pipeline. JobAgent still consumes the shared catalog those sources populate — it just no longer collects into it directly.
 
 LinkedIn remains a personalized-only source: it uses the user's persistent Chrome profile, never participates in catalog collection, and is not safe to run without an existing logged-in session. Each search is constrained to the selected location, remote-work filter, and requested time window, and infinite-scroll/pagination is capped at ten pages. Canonical job URLs, stable URL-based IDs, duplicate-card suppression, no-results-banner detection, and browser error diagnostics protect against recommendation widgets and runaway scraping. No login or live account scrape is performed by offline tests.
-
-justjoin.it uses the server-rendered Next.js/RSC listing payload for the complete result pages exposed by the board and Playwright only for detail descriptions. Search applies a local query guard, publication-date cutoff, canonical known-URL filtering, and retains salary, skills, seniority, and native remote/Poland facts. It is intentionally routed only for Poland/Polska/PL; request and funnel failures are exposed in source diagnostics. Because the board is Poland-focused, this avoids treating its listings as worldwide remote inventory.
 
 theprotocol.it is Cloudflare-gated and therefore uses a visible Chrome Playwright session. Listing and detail data come from the page's `__NEXT_DATA__`; numbered listing pages are followed when pagination metadata reports more than one page. The adapter applies technology matching, strict publication dates, canonical URL/ID handling, and native remote/Poland facts, while exposing blocked-page, timeout, and partial-pagination diagnostics. It remains intentionally limited to Poland/Polska/PL and uses adaptive pauses to reduce challenge risk.
 
 it.pracuj.pl uses the same visible-browser/Cloudflare-safe route. Its `jobOffers` dehydrated query contains the listing preview, which is deliberately retained instead of opening `www.pracuj.pl` detail pages because that cross-subdomain navigation has triggered CAPTCHA challenges. Numbered listing pages are followed from the result count; local query/date filters, canonical IDs/URLs, and native remote/Poland facts are retained, with blocked-page and pagination diagnostics. Routing is Poland-only (Poland/Polska/PL).
 
-NoFluffJobs reads Angular `serverApp-state` TransferState from its public HTTP response, then fetches each detail page for the full description and salary facts. The adapter applies local query/date/Poland filters, canonical known-URL and stable-ID handling, retains structured salary and remote facts, and follows pagination when the state exposes page metadata. Missing TransferState, HTTP failures, detail failures, and partial pages are visible through source diagnostics; the source is routed only for Poland/Polska/PL.
+LinkedIn, theprotocol.it, and it.pracuj.pl all run concurrently now instead of one after another (`collector/runner.py`'s `ThreadPoolExecutor`): each drives its own independent browser context and none of them share a rate limit with each other, so there was nothing to gain from serializing their stealth pauses. `max_jobs` is still a hard ceiling across all three, enforced by a shared, locked counter rather than recomputed after each source finishes.
 
-SOLID.Jobs exposes the complete IT division through a vendor-specific JSON `Accept` media type; the adapter caches that full list for the run and filters it locally because the endpoint does not provide reliable keyword filtering. Detail calls use the matching vendor media type and preserve description/profile text. Structured remote mode and salary fields, canonical URLs, query/date diagnostics, and detail failures are retained; the source is routed only for Poland/Polska/PL and includes hybrid/onsite listings.
-
-Remotive is downloaded once per collector run and filtered locally for every configured query and country. This stays within the provider's published request-frequency guidance while preserving broad-role recall; public listings retain the Remotive source attribution and application link required by its API terms.
-
-Remote OK combines its newest generic feed with canonical tag feeds selected through source-specific aliases such as `node`, `golang`, `full-stack`, and `machine-learning`. Tag failures degrade the search to the generic feed and are reported as partial instead of being mistaken for an empty source. Technology matching ignores noisy feed tags and uses the title and description; source-native remote and disclosed annual USD salary fields remain available to extraction.
-
-Working Nomads is fetched once from its exposed feed and filtered locally. The feed currently has no pagination and its category parameter is ignored, so JobAgent treats it as a limited upstream window rather than a complete archive. Stable posting IDs are derived from Working Nomads URLs, while query, date, geography, known-URL, and returned counts remain visible in collection diagnostics.
-
-Himalayas is fetched from its bounded public RSS feed and filtered locally by query, publication/expiry date, and the feed's country restrictions. Timezone restrictions and remote status are retained as source-native structured facts; request, XML, query, date, geography, and known-URL outcomes are exposed in collection diagnostics.
-
-Arbeitnow Europe is fetched from its paginated public JSON API and filtered locally by query, publication date, remote status, and country restrictions. Pages are followed until the API is exhausted or the configured date window is reached; stable URL/slug IDs, restricted locations, and source-native remote facts are retained, with pagination and funnel diagnostics recorded for every search.
-
-Arbeitnow UK uses the provider's separate UK feed and requires explicit Poland, Bulgaria, European, EMEA, or worldwide eligibility. UK-restricted and ambiguous bare-remote locations are not treated as evidence that the role can legally be performed from Poland or Bulgaria. The feed's visa-sponsorship flag is retained as source-native data.
-
-Ashby collection reads each configured public job board through the Posting API with compensation included, retains native remote regions and salary ranges, and reports board-level failures in collection diagnostics. Known URLs are compared canonically and postings without an API ID fall back to their canonical posting URL; coverage is limited to the maintained board registry.
-
-Hacker News collection discovers the newest monthly “Who is hiring?” story through Algolia, then reads the complete story item and its top-level comments. It selects the newest matching thread rather than trusting search-result order, preserves the comment ID/canonical HN URL, and rejects ambiguous remote or country-restricted listings unless the text explicitly supports the requested country (including Poland or Bulgaria).
-
-Greenhouse collection reads every configured company board through the official public Boards API with full job content. Boards are fetched concurrently, individual failures are reported as partial collection instead of being hidden, and canonical URLs are used for known-job filtering. Greenhouse has no global job index, so coverage is intentionally limited to the maintained company list in `collector/sources/ats_companies.json`; adding a company means adding its public board slug.
-
-Lever collection follows the official public Postings API pagination for every configured company, preserves all returned locations and native `workplaceType`, and reports individual board or later-page failures without discarding already downloaded pages. Canonical URLs prevent tracking parameters from creating duplicate known jobs. Like Greenhouse, coverage is defined by the maintained public board registry rather than a global Lever index.
-
-Jobicy's unauthenticated JSON API exposes a seven-day feed with at most 200 jobs per page. JobAgent follows the API's opaque cursor until completion, caches each normalized tag request for the active source context, and falls back to the generic feed for queries shorter than the API's 3-character tag minimum (for example, QA), applying the shared query matcher locally. Publication dates, explicit geo restrictions (including Poland/Bulgaria via the shared country matcher), known URLs, stable API IDs, salary and seniority fields are retained; API pagination, partial cursor reads, and funnel counts are visible in collection diagnostics. Jobicy's fair-use guidance recommends no automated synchronization more often than hourly, preserving Jobicy attribution and the canonical application URL.
-
-JobsCollider's endpoint is currently branded by its provider as the Remote First Jobs API. JobAgent scans the public maximum of five pages with 100 jobs each, applies query, date, and Poland/Bulgaria eligibility filters locally, and reports when the upstream page cap is reached or a later page fails. Stable URL keys, remote regions, salary, seniority, and funnel counts are retained. The source requires visible Remote First Jobs credit and direct canonical links. Because the feed includes both remote and hybrid roles, remote availability is confirmed later from each description rather than assumed by the adapter.
-
-We Work Remotely merges the official All Programming, Full-Stack, Back-End, Front-End, and DevOps/Sysadmin RSS feeds by posting URL. RSS publication dates enforce the requested collection window even when promoted listings appear out of order. A failed category feed is reported as a partial source result, and public listings preserve the WWR attribution and direct link required by the RSS terms.
-
-Search-driven sources use source-specific query planning. LinkedIn searches the candidate's work country plus compatible regional scopes such as Europe, EMEA, and Worldwide; preferred employer countries remain ranking signals because LinkedIn's location filter describes the job's geography, not the employer's headquarters. Tag-based boards receive normalized tags, and catalog-style sources use token-aware role aliases instead of exact title substrings. Query execution rotates using historical search statistics so later queries are not permanently starved by a job limit.
+Search-driven sources use source-specific query planning. LinkedIn searches the candidate's work country plus compatible regional scopes such as Europe, EMEA, and Worldwide; preferred employer countries remain ranking signals because LinkedIn's location filter describes the job's geography, not the employer's headquarters. Query execution rotates using historical search statistics so later queries are not permanently starved by a job limit.
 
 ### Shared public catalog
 
-`python scripts/collect_catalog.py` fills JobAgentWeb's shared, logged-out catalog for technology categories such as PHP, Python, Node.js, React, Angular, QA, Java, .NET, and Go, plus broad role families such as Software Engineering, Backend, Frontend, Full Stack, Mobile, DevOps, Data, and ML/AI. It uses all registered sources except LinkedIn, which remains available only to personal runs because catalog-scale browser automation would put the user's account at risk. Collection uses a shared alias taxonomy and token-aware matcher, so broad queries can discover relevant specialist roles without requiring an exact title phrase. Use `--queries-per-run`, `--max-jobs-per-source`, and `--sources` to adjust the budget; an explicit catalog request for LinkedIn is rejected.
+The bulk of catalog collection now runs server-side in JobAgentWeb (its own APScheduler job, daily), not here — see that repo's `docs/catalog_collection.md`. `python scripts/collect_catalog.py` still exists on this side for the 2 remaining Poland-only browser sources (theprotocol.it, it.pracuj.pl); LinkedIn is rejected from an explicit `--sources` request, same as before. Given both are slow, stealth-paced browser sessions rather than the cheap HTTP APIs this script was originally built to batch through, it's a narrow fallback now rather than the primary catalog path.
 
-Catalog collection reuses the same global `job_postings` records and cross-source aliases as personal runs. The authenticated JobAgentWeb catalog-import endpoint can attach a technology/country slice to an account by creating only its `user_job_states` rows; it does not recollect or copy the postings. Descriptions, extraction data, and duplicates stay shared; scores, ranking, and application decisions remain user-specific.
-
-To inspect retrieval without storing jobs, run `python scripts/search_probe.py --sources jobscollider jobicy --queries "Backend Engineer" PHP --locations Poland`. The JSON output contains sample jobs and the available upstream → query → date → geography funnel counters.
+To inspect retrieval without storing jobs, run `python scripts/search_probe.py --sources theprotocol itpracuj --queries "Backend Engineer" PHP --locations Poland`. The JSON output contains sample jobs and the available upstream → query → date → geography funnel counters.
 
 ---
 
@@ -621,27 +586,10 @@ JobAgent/
 │   ├── query_pruning.py            # Auto-excludes reject-heavy or zero-yield search queries
 │   ├── utils.py                    # HTML→text excerpt builder shared by scorer/debate prompts
 │   ├── runner.py                   # Orchestrates sources → descriptions → JobAgentWeb
-│   └── sources/
+│   └── sources/                    # Only the 3 sources that need a browser; the other 16 moved to JobAgentWeb
 │       ├── linkedin.py             # Playwright + system Chrome, stealth delays
-│       ├── weworkremotely.py       # RSS feed
-│       ├── himalayas.py            # RSS feed
-│       ├── remotive.py             # JSON API
-│       ├── remoteok.py             # JSON API
-│       ├── workingnomads.py        # JSON API
-│       ├── jobicy.py               # JSON API
-│       ├── jobscollider.py         # JSON API
-│       ├── arbeitnow.py            # Europe + UK JSON APIs
-│       ├── hackernews.py           # HN Who's Hiring via Algolia API
-│       ├── ats.py                  # Shared public ATS board collector
-│       ├── greenhouse.py           # Greenhouse public board API
-│       ├── lever.py                # Lever public postings API (paged board reads)
-│       ├── ashby.py                # Ashby public posting API
-│       ├── ats_companies.json      # Curated company board registry
-│       ├── justjoin.py             # justjoin.it — embedded JSON + Playwright for descriptions
 │       ├── theprotocol.py          # theprotocol.it — Playwright (Cloudflare-gated)
-│       ├── itpracuj.py             # it.pracuj.pl — Playwright (Cloudflare-gated)
-│       ├── nofluffjobs.py          # NoFluffJobs — plain HTTP, Angular TransferState JSON
-│       └── solidjobs.py            # SOLID.Jobs — plain HTTP, vendor Accept headers
+│       └── itpracuj.py             # it.pracuj.pl — Playwright (Cloudflare-gated)
 ├── evaluator/
 │   ├── profile.py                  # Load CV profile via api_client
 │   ├── scorer.py                   # Sonnet prompt builder + tool-use scoring (sub-scores/pros/cons)

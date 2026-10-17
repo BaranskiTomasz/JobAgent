@@ -1,8 +1,13 @@
+from collector import query_planner
 from collector.query_planner import SourceQuery, order_queries, source_queries
 
 
-def test_tag_sources_receive_specific_token():
-    assert source_queries("jobicy", ["Senior Backend Engineer", "Symfony Developer"]) == [
+def test_tag_sources_receive_specific_token(monkeypatch):
+    # _TAG_SOURCES has no real members right now (its one, jobicy, moved to
+    # JobAgentWeb's server-side catalog collector) - simulate a hypothetical
+    # one to keep covering the mechanism itself.
+    monkeypatch.setattr(query_planner, "_TAG_SOURCES", {"tag-source"})
+    assert source_queries("tag-source", ["Senior Backend Engineer", "Symfony Developer"]) == [
         SourceQuery("Senior Backend Engineer", "backend"),
         SourceQuery("Symfony Developer", "symfony"),
     ]

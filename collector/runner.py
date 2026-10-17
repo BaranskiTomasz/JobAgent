@@ -131,18 +131,13 @@ def _fetch_descriptions_in_batches(
 
 # Routes each source's search calls given the candidate's selected countries
 # (remote-mode) and cities (hybrid/onsite-mode). LinkedIn gets one search per
-# location. The 4 worldwide remote boards get one search per candidate
-# location instead of a single "Remote" search, since collector/location.py
-# treats "Remote" as matching everything unconditionally (_REMOTE_TERMS),
-# which would make a country selection a no-op for these sources. The
-# Poland-focused boards only ever search "Poland", and only when the
-# candidate wants Poland at all.
-_WORLDWIDE_REMOTE_SOURCES = frozenset({
-    "remotive", "remoteok", "workingnomads", "weworkremotely", "himalayas",
-    "jobicy", "jobscollider", "arbeitnow", "arbeitnow_uk",
-    "greenhouse", "lever", "ashby", "hackernews",
-})
-_POLAND_ONLY_SOURCES = frozenset({"justjoin", "theprotocol", "itpracuj", "nofluffjobs", "solidjobs"})
+# location. The Poland-focused boards only ever search "Poland", and only
+# when the candidate wants Poland at all. The worldwide-remote-board routing
+# this used to also handle (remotive/remoteok/workingnomads/weworkremotely
+# and others) moved to JobAgentWeb's server-side catalog collector along
+# with those sources themselves - this module now only drives the 3 sources
+# that need a real browser.
+_POLAND_ONLY_SOURCES = frozenset({"theprotocol", "itpracuj"})
 _POLAND_ALIASES = frozenset({"poland", "polska", "pl"})
 _POLAND_CITIES = frozenset({
     "warsaw", "warszawa", "krakow", "kraków", "wroclaw", "wrocław", "gdansk", "gdańsk",
@@ -155,8 +150,6 @@ _POLAND_CITIES = frozenset({
 def _locations_for_source(source_id: str, locations: list[str], work_country: str | None = None) -> list[str]:
     if source_id == "linkedin":
         return [work_country] if work_country else locations
-    if source_id in _WORLDWIDE_REMOTE_SOURCES:
-        return [work_country] if work_country else (locations if locations else ["Remote"])
     if source_id in _POLAND_ONLY_SOURCES:
         wants_poland = any(
             l.strip().lower() in _POLAND_ALIASES or l.strip().lower() in _POLAND_CITIES
@@ -182,15 +175,9 @@ def _search_pause_seconds(new_count: int) -> float:
 # Hard ceiling on total search calls in one run, independent of max_jobs,
 # since a job-count budget doesn't help when searches simply find nothing new.
 # Generous on purpose: a safety rail, not a normal-case limit. Only counts
-# searches against sources with requires_stealth_pauses=True (LinkedIn,
-# theprotocol, itpracuj): those make one real, paced network request per
-# (title, location) pair, so the count reflects real cost. The worldwide-remote
-# sources (remotive/remoteok/workingnomads/weworkremotely) fetch once per query
-# and then filter that cached response locally per candidate country - counting
-# each of those ~27 free local iterations as a "search" let them exhaust this
-# cap before LinkedIn even finished its own queries, starving every source
-# after them (including every Poland-focused board) of a single real search,
-# every run, since the per-country expansion landed (2026-08-02).
+# searches against sources with requires_stealth_pauses=True - every source
+# left in this module (LinkedIn, theprotocol, itpracuj) makes one real, paced
+# network request per (title, location) pair, so the count reflects real cost.
 _MAX_TOTAL_SEARCHES = 150
 _MAX_QUERIES_PER_SOURCE = 6
 
