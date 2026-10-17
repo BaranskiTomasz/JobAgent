@@ -97,6 +97,10 @@ def jobagentweb_server():
         "INVITE_CODE": "test-invite-code",  # JobAgentWeb closes registration without one, matches its own conftest.py default
         "SECRET_KEY": "test-only-secret-key-not-real-923nf",  # JobAgentWeb now hard-fails at import without one
         "DISABLE_RATE_LIMIT": "true",  # this suite registers a fresh user per test, far more than a real client
+        # Real bcrypt cost (12 rounds) takes ~2.3s per hash on this machine, paid
+        # once per test via the registration below. JobAgentWeb's security.py
+        # honors this override; production never sets it.
+        "BCRYPT_ROUNDS": "4",
         "POSTGRES_HOST": os.environ.get("POSTGRES_HOST", "10.66.0.1"),
         "POSTGRES_PORT": os.environ.get("POSTGRES_PORT", "5432"),
         "POSTGRES_DB": os.environ.get("POSTGRES_DB", "jobagentweb_test"),
