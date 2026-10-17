@@ -87,7 +87,7 @@ Search-driven sources use source-specific query planning. LinkedIn searches the 
 
 ### Shared public catalog
 
-The bulk of catalog collection now runs server-side in JobAgentWeb (its own APScheduler job, daily), not here — see that repo's `docs/catalog_collection.md`. `python scripts/collect_catalog.py` still exists on this side for the 2 remaining Poland-only browser sources (theprotocol.it, it.pracuj.pl); LinkedIn is rejected from an explicit `--sources` request, same as before. Given both are slow, stealth-paced browser sessions rather than the cheap HTTP APIs this script was originally built to batch through, it's a narrow fallback now rather than the primary catalog path.
+Catalog collection now runs entirely server-side in JobAgentWeb (its own APScheduler job, daily) — see that repo's `docs/catalog_collection.md`. Nothing on this side populates the shared catalog anymore; JobAgent only ever collects into the personal, profile-routed pool.
 
 To inspect retrieval without storing jobs, run `python scripts/search_probe.py --sources theprotocol itpracuj --queries "Backend Engineer" PHP --locations Poland`. The JSON output contains sample jobs and the available upstream → query → date → geography funnel counters.
 
@@ -129,13 +129,7 @@ python scripts/run_all.py --days 1 --max-jobs 10 --max-jobs-per-source 2 --skip-
 
 The personalized run may use LinkedIn and writes every discovered posting into the shared `job_postings` pool, while scores, ranking, status, and feedback remain attached only to the authenticated user. Stop the dashboard with `Ctrl+C`; an interrupted pipeline should be stopped through the dashboard if its remote session remains marked as running.
 
-To populate only the public, non-personalized catalog, use the shorter collection-and-extraction path. LinkedIn is rejected in catalog mode:
-
-```bash
-python scripts/collect_catalog.py --days 7 --queries-per-run 18
-```
-
-The default catalog run rotates through the configured discovery queries and collects every matching posting in the selected date window, without a global or per-source job cap. `--queries-per-run` controls how many query plans are executed in one invocation; it is not a job limit. Use `python scripts/extract_jobs.py --catalog --limit 200` to backfill unextracted shared descriptions from the last 14 days. `--max-jobs` and `--max-jobs-per-source` are optional safeguards intended for smoke tests, not normal catalog collection.
+The public, non-personalized catalog is no longer populated from this side at all — JobAgentWeb's own server-side daily job covers it (see "Shared public catalog" below). Use `python scripts/extract_jobs.py --catalog --limit 200` to backfill unextracted shared descriptions from the last 14 days, if ever needed from here.
 
 ### Prerequisites
 
@@ -629,7 +623,6 @@ JobAgent/
 ├── scripts/
 │   ├── login.py                    # Authenticate against JobAgentWeb once; saves session cookie
 │   ├── run_all.py                  # CLI: full pipeline
-│   ├── collect_catalog.py          # Collect + extract shared PL/BG public catalog jobs without LinkedIn
 │   ├── search_probe.py             # Inspect per-source retrieval funnels without storing jobs
 │   ├── rescore_new.py              # Re-score new jobs only
 │   ├── distill_preferences.py      # Run distillation once
