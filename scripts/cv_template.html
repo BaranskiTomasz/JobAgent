@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Tomasz Baranski CV</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Poppins', 'Segoe UI', Arial, sans-serif;
+    color: #2a2f33;
+    background: #ffffff;
+  }
+
+  .header {
+    background: #33505E;
+    color: #ffffff;
+    padding: 46px 60px 38px;
+    text-align: center;
+  }
+  .header h1 {
+    margin: 0;
+    font-weight: 300;
+    font-size: 40px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .header .role {
+    margin: 10px 0 0;
+    font-weight: 400;
+    font-size: 14px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #e4edf0;
+  }
+  .header .spec {
+    margin: 2px 0 0;
+    font-weight: 400;
+    font-size: 14px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #e4edf0;
+  }
+  .header hr {
+    width: 150px;
+    border: none;
+    border-top: 1px solid rgba(255,255,255,0.55);
+    margin: 20px auto 18px;
+  }
+  .header .contact-label {
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #cfe0e4;
+    margin-bottom: 10px;
+  }
+  .header .contact-row {
+    display: flex;
+    justify-content: center;
+    gap: 28px;
+    flex-wrap: wrap;
+    font-size: 12.5px;
+    color: #f2f6f7;
+  }
+  .header .contact-row span { display: inline-flex; align-items: center; gap: 6px; }
+  .header .contact-row svg { width: 13px; height: 13px; flex: none; }
+
+  .body { padding: 30px 60px 44px; }
+
+  .section { margin-bottom: 20px; }
+  .section:last-child { margin-bottom: 0; }
+  .section-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 11px;
+  }
+  .section-head svg { width: 17px; height: 17px; color: #33505E; flex: none; }
+  .section-head h2 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #243238;
+    white-space: nowrap;
+  }
+  .section-head .rule { flex: 1; height: 1px; background: #d7dcde; }
+
+  .summary p {
+    margin: 0 0 9px;
+    font-size: 12.3px;
+    line-height: 1.62;
+    color: #383f43;
+  }
+  .summary p:last-child { margin-bottom: 0; }
+
+  .comp-list { margin: 0; padding: 0; list-style: none; }
+  .comp-list li {
+    font-size: 12.3px;
+    line-height: 1.62;
+    color: #383f43;
+    margin-bottom: 3px;
+  }
+  .comp-list b { color: #243238; font-weight: 600; }
+
+  .job { margin-bottom: 15px; }
+  .job:last-child { margin-bottom: 0; }
+  .job .role-line { font-size: 12.8px; font-weight: 600; color: #243238; }
+  .job .org-line { font-size: 11.8px; color: #5a6267; margin: 1px 0 6px; }
+  .job ul { margin: 0; padding-left: 16px; }
+  .job li { font-size: 12.1px; line-height: 1.55; color: #383f43; margin-bottom: 2px; }
+
+  .two-col { display: flex; gap: 40px; }
+  .two-col > div { flex: 1; min-width: 0; }
+
+  .edu-entry { margin-bottom: 12px; }
+  .edu-entry:last-child { margin-bottom: 0; }
+  .edu-entry .role-line { font-size: 12.5px; font-weight: 600; color: #243238; }
+  .edu-entry .org-line { font-size: 11.5px; color: #5a6267; margin: 1px 0 4px; }
+  .edu-entry p { font-size: 11.8px; line-height: 1.5; color: #383f43; margin: 0; }
+
+  .plain p { font-size: 12.1px; line-height: 1.55; color: #383f43; margin: 0; }
+
+  .consent { font-size: 9px; color: #9aa1a4; text-align: center; margin-top: 26px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Tomasz Baranski</h1>
+  <div class="role">Senior Software Engineer</div>
+  <div class="spec">PHP &amp; Python</div>
+  <hr>
+  <div class="contact-label">Contact</div>
+  <div class="contact-row">
+    <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg> +48 692 496 153</span>
+    <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z" opacity="0"/><path d="M22 6l-10 7L2 6"/><rect x="2" y="4" width="20" height="16" rx="2"/></svg> tomek_baranski@wp.pl</span>
+    <span><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 0h-14c-2.76 0-5 2.24-5 5v14c0 2.76 2.24 5 5 5h14c2.76 0 5-2.24 5-5v-14c0-2.76-2.24-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.27c-.97 0-1.75-.79-1.75-1.75s.78-1.75 1.75-1.75 1.75.78 1.75 1.75-.78 1.75-1.75 1.75zm13.5 12.27h-3v-5.6c0-1.33-.03-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.7h-3v-11h2.88v1.5h.04c.4-.76 1.38-1.56 2.84-1.56 3.04 0 3.6 2 3.6 4.59v6.47z"/></svg> linkedin.com/in/baranskitomasz</span>
+  </div>
+</div>
+
+<div class="body">
+
+  <div class="section summary">
+    <div class="section-head">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg>
+      <h2>Career Summary</h2>
+      <div class="rule"></div>
+    </div>
+    __SUMMARY__
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M2 20h20M9 20l.5-4h5l.5 4"/></svg>
+      <h2>Core Competencies</h2>
+      <div class="rule"></div>
+    </div>
+    <ul class="comp-list">
+__COMPETENCIES__
+    </ul>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+      <h2>Work Experience</h2>
+      <div class="rule"></div>
+    </div>
+
+    <div class="job">
+      <div class="role-line">Senior Software Engineer</div>
+      <div class="org-line">Consensus — Remote | Sep 2022 – Present</div>
+      <ul>
+        <li>developing and maintaining complex web applications using PHP 8, Python, Symfony, Slim, Spiral Framework</li>
+        <li>designing and implementing scalable RESTful APIs and service integrations within a distributed SaaS platform architecture</li>
+        <li>modernizing legacy systems and implementing best practices in software architecture and design patterns</li>
+        <li>driving adoption of automated testing practices (unit, functional) to ensure system reliability and enable confident refactoring</li>
+        <li>leveraging Claude Code as primary AI-assisted development environment, accelerating feature delivery and reducing time spent on boilerplate and debugging</li>
+        <li>conducting code reviews and establishing engineering standards, improving code quality and consistency across the team</li>
+        <li>acting as Scrum Master for the team — facilitating Scrum ceremonies, removing impediments, and coaching the team on agile best practices</li>
+      </ul>
+    </div>
+
+    <div class="job">
+      <div class="role-line">Dynamic Squad Team Lead</div>
+      <div class="org-line">Consensus — Remote | Apr 2025 – Oct 2025</div>
+      <ul>
+        <li>led a temporarily assembled team commissioned to develop and implement a new, strategic Discovery Demo functionality within the main application</li>
+        <li>managed daily operations and ensured On-Time Delivery (OTD) by tracking progress and removing blockers</li>
+        <li>collaborated with architects to design scalable solutions and integrate them with the existing ecosystem</li>
+        <li>acted as a primary bridge between Product Managers and the engineering team, managing technical risks and business expectations</li>
+      </ul>
+    </div>
+
+    <div class="job">
+      <div class="role-line">PHP Developer</div>
+      <div class="org-line">eMAG — Warsaw, PL | Nov 2018 – Aug 2022</div>
+      <ul>
+        <li>internal apps development for the biggest e-commerce player in Romania, Hungary, Bulgaria, in an international environment</li>
+        <li>working with PHP 7-8, Symfony, Doctrine, MySQL, JSON, clean code, RabbitMQ, Docker, Kubernetes, unit/functional tests, Scrum, Kanban</li>
+        <li>acting as Scrum Master for the team, facilitating ceremonies and supporting agile delivery practices</li>
+      </ul>
+    </div>
+
+    <div class="job">
+      <div class="role-line">Back-End Developer</div>
+      <div class="org-line">Leon Software — Warsaw, PL | Dec 2016 – Oct 2018</div>
+      <ul>
+        <li>service development for the aviation industry</li>
+        <li>working with PHP 7, Doctrine, MySQL, React.js, JSON, SOAP, Docker, GraphQL, Clean Code</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12"/></svg>
+      <h2>Projects</h2>
+      <div class="rule"></div>
+    </div>
+    <div class="plain">
+      <p><b>JobAgent — AI-Powered Job Search Agent</b> | jobagent.tbaranski.it<br>
+      Personal project: a Python-based job search agent that uses embeddings and vector similarity search combined with a multi-step AI ranking pipeline to match job offers to candidate profiles. Built end-to-end with AI-assisted development, covering data ingestion, embedding generation, and automated candidate-offer scoring.</p>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div>
+      <div class="section">
+        <div class="section-head">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 6-10 7L2 6"/></svg>
+          <h2>Education</h2>
+          <div class="rule"></div>
+        </div>
+        <div class="edu-entry">
+          <div class="role-line">Back-End Developer Bootcamp</div>
+          <div class="org-line">CodersLab — Warsaw, PL | Mar 2016 – Oct 2016</div>
+          <p>Back-end course. Intensive practice training in PHP basics, OOP, TDD, MySQL, JavaScript/jQuery, Symfony2, GIT.</p>
+        </div>
+        <div class="edu-entry">
+          <div class="role-line">Spatial Development, M.Sc.</div>
+          <div class="org-line">Warsaw University of Life Sciences | Oct 2004 – Jun 2009</div>
+          <p>Thesis: Using network analysis to project bicycle routes. Feb 2009 — distinction of the University President (PROMNI Association scholarship).</p>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="section">
+        <div class="section-head">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          <h2>Languages</h2>
+          <div class="rule"></div>
+        </div>
+        <div class="plain">
+          <p>Polish — native speaker<br>English — professional working proficiency (C1)</p>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-head">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          <h2>Interests</h2>
+          <div class="rule"></div>
+        </div>
+        <div class="plain"><p>Downhill, mountain biking, hiking, carpentry</p></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="consent">I hereby consent to my personal data being processed for the purpose of considering my application for the present and future vacancies.</div>
+
+</div>
+</body>
+</html>
