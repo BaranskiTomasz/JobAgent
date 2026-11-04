@@ -102,6 +102,9 @@ def _format_job_for_review(job: dict) -> str:
 def _parse_reviews(tool_input: dict) -> dict[str, dict]:
     reviews = {}
     for item in tool_input.get("reviews", []):
+        if not isinstance(item, dict):
+            logger.warning("Skipping malformed debate review item (not a dict): %r", item)
+            continue
         job_id = item.get("job_id")
         flag = item.get("flag")
         if job_id and flag in _VALID_FLAGS:

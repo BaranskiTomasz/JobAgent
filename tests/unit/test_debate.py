@@ -85,6 +85,20 @@ class TestParseReviews:
         reviews = _parse_reviews({"reviews": [{"flag": "overrated", "note": "x"}]})
         assert reviews == {}
 
+    def test_non_dict_item_dropped_without_losing_valid_reviews(self):
+        reviews = _parse_reviews({
+            "reviews": [
+                {"job_id": "j1", "flag": "overrated", "note": "Ranked too high"},
+                "malformed review",
+                {"job_id": "j2", "flag": "underrated", "note": "Ranked too low"},
+            ],
+        })
+
+        assert reviews == {
+            "j1": {"flag": "overrated", "note": "Ranked too high"},
+            "j2": {"flag": "underrated", "note": "Ranked too low"},
+        }
+
 
 class TestDebateRank:
     def test_empty_input_returns_empty(self):
