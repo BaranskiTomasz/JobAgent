@@ -116,9 +116,8 @@ def main() -> int:
         # Must precede EVALUATOR, dealbreakers.py reads structured_data, and a job
         # never re-enters the unscored pool once scored.
         logger.info("\n=== EXTRACTOR ===")
-        collected_ids = set(c_result.get("job_ids") or [])
         try:
-            new_jobs = [job for job in job_repository.get_new_needing_extraction() if job["id"] in collected_ids]
+            new_jobs = job_repository.get_new_needing_extraction()
             extracted = run_extraction(new_jobs)
             logger.info(f"Extractor result: structured_data updated for {extracted} job(s)")
         except Exception as e:
@@ -126,7 +125,7 @@ def main() -> int:
 
         logger.info("\n=== EVALUATOR ===")
         try:
-            evaluation_jobs = [job for job in job_repository.get_new_with_descriptions() if job["id"] in collected_ids]
+            evaluation_jobs = job_repository.get_unscored()
             e_result = evaluate(jobs=evaluation_jobs) if evaluation_jobs else {"jobs_scored": 0}
         except Exception as e:
             logger.error(f"Evaluator failed: {e}")
