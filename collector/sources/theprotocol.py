@@ -349,6 +349,8 @@ class TheProtocolSource(JobSource):
             city = workplace[0].get("city") if workplace else None
             modes = {_WORK_MODE_TOKENS.get(m.lower()) for m in (offer.get("workModes") or [])}
             modes.discard(None)
+            if modes and "remote" not in modes:
+                continue
             location_str = f"{city}, Poland{workplace_suffix(modes)}" if city else f"Poland{workplace_suffix(modes)}"
 
             # Extract structured data from the listing-level offer object

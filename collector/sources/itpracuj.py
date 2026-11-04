@@ -341,6 +341,8 @@ class ItPracujSource(JobSource):
             city = offers[0].get("displayWorkplace")
             modes = {_WORK_MODE_TOKENS.get(m.lower()) for m in (group.get("workModes") or [])}
             modes.discard(None)
+            if modes and "remote" not in modes:
+                continue
             location_str = f"{city}, Poland{workplace_suffix(modes)}" if city else f"Poland{workplace_suffix(modes)}"
             geo_matched += 1
 

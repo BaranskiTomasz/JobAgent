@@ -487,12 +487,9 @@ def run(
     if locations:
         criteria["locations"] = locations
     elif preferences:
-        work_mode = preferences.get("work_mode") or []
         markets = []
-        if "remote" in work_mode and preferences.get("work_country"):
+        if preferences.get("work_country"):
             markets.append(preferences["work_country"])
-        if "hybrid" in work_mode or "onsite" in work_mode:
-            markets.extend(preferences.get("hybrid_cities") or [])
         if markets:
             criteria["locations"] = list(dict.fromkeys(markets))
     if search_queries_override:

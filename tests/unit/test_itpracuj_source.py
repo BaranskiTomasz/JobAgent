@@ -216,16 +216,21 @@ class TestItPracujSourceSearch:
         results = src.search("PHP", "Poland")
         assert results[0].location == "Warszawa, Poland (Remote)"
 
-    def test_hybrid_workmode_labeled_hybrid(self):
+    def test_hybrid_workmode_is_excluded(self):
         src = _make_source()
         group = _group(city="Krakow", work_modes=["Praca hybrydowa"])
         src._page.eval_on_selector.return_value = json.dumps(_search_payload([group]))
-        results = src.search("PHP", "Poland")
-        assert results[0].location == "Krakow, Poland (Hybrid)"
+        assert src.search("PHP", "Poland") == []
 
-    def test_onsite_workmode_has_no_suffix(self):
+    def test_onsite_workmode_is_excluded(self):
         src = _make_source()
         group = _group(city="Gdansk", work_modes=["Praca stacjonarna"])
+        src._page.eval_on_selector.return_value = json.dumps(_search_payload([group]))
+        assert src.search("PHP", "Poland") == []
+
+    def test_unrecognized_workmode_is_included(self):
+        src = _make_source()
+        group = _group(city="Gdansk", work_modes=["Nowy nieznany tryb"])
         src._page.eval_on_selector.return_value = json.dumps(_search_payload([group]))
         results = src.search("PHP", "Poland")
         assert results[0].location == "Gdansk, Poland"

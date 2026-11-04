@@ -198,27 +198,30 @@ class TestTheProtocolSourceSearch:
         results = src.search("PHP", "Poland")
         assert results[0].location == "Warszawa, Poland (Remote)"
 
-    def test_hybrid_workmode_labeled_hybrid(self):
+    def test_hybrid_workmode_is_excluded(self):
         src = _make_source()
         offer = _offer(city="Krakow", work_modes=["hybrid"])
         src._page.eval_on_selector.return_value = json.dumps(_search_payload([offer]))
-        results = src.search("PHP", "Poland")
-        assert results[0].location == "Krakow, Poland (Hybrid)"
+        assert src.search("PHP", "Poland") == []
 
-    def test_onsite_workmode_has_no_suffix(self):
+    def test_onsite_workmode_is_excluded(self):
         src = _make_source()
         offer = _offer(city="Gdansk", work_modes=["full office"])
         src._page.eval_on_selector.return_value = json.dumps(_search_payload([offer]))
-        results = src.search("PHP", "Poland")
-        assert results[0].location == "Gdansk, Poland"
+        assert src.search("PHP", "Poland") == []
 
-    def test_polish_workmode_tokens_recognized(self):
+    def test_polish_non_remote_workmode_tokens_are_excluded(self):
         src = _make_source()
         offer = _offer(city="Poznan", work_modes=["hybrydowa", "stacjonarna"])
         src._page.eval_on_selector.return_value = json.dumps(_search_payload([offer]))
+        assert src.search("PHP", "Poland") == []
+
+    def test_unrecognized_workmode_is_included(self):
+        src = _make_source()
+        offer = _offer(city="Poznan", work_modes=["future distributed mode"])
+        src._page.eval_on_selector.return_value = json.dumps(_search_payload([offer]))
         results = src.search("PHP", "Poland")
-        # remote not present, hybrid is -> hybrid wins over onsite
-        assert results[0].location == "Poznan, Poland (Hybrid)"
+        assert results[0].location == "Poznan, Poland"
 
     def test_detail_url_built_from_offer_url_name(self):
         src = _make_source()

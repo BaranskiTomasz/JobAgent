@@ -59,48 +59,15 @@
 
     <section class="card" id="s-location">
       <div class="card__head"><h2>01 · Work mode & location</h2><span class="optional-tag">optional</span></div>
-      <p class="card__hint">You can select more than one.</p>
+      <p class="card__hint">Job searches are remote-only.</p>
       <div class="field-row chip-group" id="workmode-group">
-        <span class="chip" data-value="remote" onclick="toggleWorkMode(this)">Remote</span>
-        <span class="chip" data-value="hybrid" onclick="toggleWorkMode(this)">Hybrid</span>
-        <span class="chip" data-value="onsite" onclick="toggleWorkMode(this)">On-site</span>
+        <span class="chip on" data-value="remote">Remote</span>
       </div>
 
-      <div id="remote-panel" style="display:none;">
+      <div id="remote-panel">
         <label class="field-label" for="work-country">Country you will work from</label>
         <input type="text" id="work-country" list="country-suggestions" placeholder="e.g. Poland">
-        <label class="field-label" style="margin-top:16px;">Preferred countries of the employer</label>
-        <div class="field-row" id="country-chips"></div>
-        <div class="group-add-row">
-          <button class="btn-group-add info" type="button" data-group="EU" onclick="addCountryGroup('EU')">
-            + Add all EU countries
-            <span class="tip" id="tip-EU"></span>
-          </button>
-          <button class="btn-group-add info" type="button" data-group="EUROZONE" onclick="addCountryGroup('EUROZONE')">
-            + Add Eurozone countries
-            <span class="tip" id="tip-EUROZONE"></span>
-          </button>
-          <button class="btn-group-add info" type="button" data-group="NATO" onclick="addCountryGroup('NATO')">
-            + Add NATO countries
-            <span class="tip" id="tip-NATO"></span>
-          </button>
-        </div>
-        <div class="add-row">
-          <input type="text" id="country-input" list="country-suggestions" placeholder="Add a country, e.g. Canada" onkeydown="if(event.key==='Enter'){addChip('country-chips','country-input'); event.preventDefault();}">
-          <datalist id="country-suggestions"></datalist>
-          <button class="btn-add" type="button" onclick="addChip('country-chips','country-input')">Add</button>
-        </div>
-        <p class="card__hint" style="margin:8px 0 0;">Employer countries influence ranking only. Remote eligibility is checked against the country you work from.</p>
-      </div>
-
-      <div id="hybrid-panel" style="display:none; margin-top:16px;">
-        <label class="field-label">Cities you could realistically commute to or relocate for</label>
-        <div class="field-row" id="city-chips"></div>
-        <div class="add-row">
-          <input type="text" id="city-input" list="city-suggestions" placeholder="Add a city, e.g. Warsaw" onkeydown="if(event.key==='Enter'){addChip('city-chips','city-input'); event.preventDefault();}">
-          <datalist id="city-suggestions"></datalist>
-          <button class="btn-add" type="button" onclick="addChip('city-chips','city-input')">Add</button>
-        </div>
+        <datalist id="country-suggestions"></datalist>
       </div>
     </section>
 

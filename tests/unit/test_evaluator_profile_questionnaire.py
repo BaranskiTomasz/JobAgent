@@ -28,14 +28,16 @@ def test_includes_header_and_work_mode(mock_prefs):
 
 
 @patch("evaluator.profile.candidate_preferences_repository.get_active")
-def test_remote_countries_and_hybrid_cities(mock_prefs):
+def test_remote_countries_render_without_removed_location_preferences(mock_prefs):
     mock_prefs.return_value = {
         "remote_countries": ["Poland", "Germany"],
         "hybrid_cities": ["Warsaw"],
+        "employer_countries": ["Atlantis"],
     }
     section = load_questionnaire_preferences()
     assert "Remote must be available in: Poland, Germany" in section
-    assert "OK with hybrid in: Warsaw" in section
+    assert "Warsaw" not in section
+    assert "Atlantis" not in section
 
 
 @patch("evaluator.profile.candidate_preferences_repository.get_active")
@@ -152,6 +154,17 @@ def test_removed_preferred_industries_does_not_reach_the_retrieval_query(mock_pr
     query = build_retrieval_query("CANDIDATE: Senior Python dev")
     assert "product" in query
     assert "fintech" not in query
+
+
+@patch("evaluator.profile.candidate_preferences_repository.get_active")
+def test_employer_countries_do_not_reach_the_retrieval_query(mock_prefs):
+    mock_prefs.return_value = {
+        "preferred_company_types": ["product"],
+        "employer_countries": ["Atlantis"],
+    }
+    query = build_retrieval_query("CANDIDATE: Senior Python dev")
+    assert "product" in query
+    assert "Atlantis" not in query
 
 
 @patch("evaluator.profile.candidate_preferences_repository.get_active")

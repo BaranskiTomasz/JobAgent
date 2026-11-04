@@ -605,6 +605,30 @@ class TestRunSessionOwnership:
     @patch("collector.runner._collect_job_cards")
     @patch("collector.runner.job_repository")
     @patch("collector.runner.session_repository")
+    @patch("collector.runner.candidate_preferences_repository")
+    @patch("collector.runner.criteria_repository")
+    def test_builds_markets_from_work_country_only(
+        self, mock_criteria, mock_preferences, mock_session, mock_jobs,
+        mock_collect, mock_lang, mock_kw,
+    ):
+        _mock_run_deps(mock_criteria, mock_jobs, mock_collect, mock_lang, mock_kw)
+        mock_criteria.get_active_dict.return_value["locations"] = []
+        mock_preferences.get_active.return_value = {
+            "work_mode": ["remote", "hybrid", "onsite"],
+            "work_country": "Germany",
+            "hybrid_cities": ["Warsaw"],
+        }
+        mock_session.start.return_value = 99
+
+        collector_run(days_back=1)
+
+        assert mock_collect.call_args.args[2] == ["Germany"]
+
+    @patch("collector.runner.apply_keyword_filter")
+    @patch("collector.runner.apply_language_filter")
+    @patch("collector.runner._collect_job_cards")
+    @patch("collector.runner.job_repository")
+    @patch("collector.runner.session_repository")
     @patch("collector.runner.criteria_repository")
     def test_reuses_given_session_and_never_starts_or_finishes_its_own(
         self, mock_criteria, mock_session, mock_jobs, mock_collect, mock_lang, mock_kw,
