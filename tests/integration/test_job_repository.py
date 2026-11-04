@@ -387,6 +387,15 @@ class TestGetNewWithDescriptions:
         assert job_id not in [r["id"] for r in result]
 
 
+class TestGetNewNeedingExtraction:
+    def test_returns_new_job_with_description_without_facts(self):
+        job_id = _insert(url="https://a.com/needs-extraction")
+
+        result = job_repository.get_new_needing_extraction()
+
+        assert job_id in [r["id"] for r in result]
+
+
 class TestGetByStatus:
     def test_returns_only_matching_status(self):
         id1 = _insert(url="https://a.com/1")

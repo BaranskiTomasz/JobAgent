@@ -118,7 +118,7 @@ def main() -> int:
         logger.info("\n=== EXTRACTOR ===")
         collected_ids = set(c_result.get("job_ids") or [])
         try:
-            new_jobs = [job for job in job_repository.get_new_with_descriptions() if job["id"] in collected_ids]
+            new_jobs = [job for job in job_repository.get_new_needing_extraction() if job["id"] in collected_ids]
             extracted = run_extraction(new_jobs)
             logger.info(f"Extractor result: structured_data updated for {extracted} job(s)")
         except Exception as e:

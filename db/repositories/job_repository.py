@@ -93,6 +93,10 @@ def get_new_with_descriptions() -> list[dict]:
     return api_client.get("/api/jobs/new-with-descriptions").json()
 
 
+def get_new_needing_extraction() -> list[dict]:
+    return api_client.get("/api/jobs/new-needing-extraction").json()
+
+
 def get_dealbreaker_rejected_with_descriptions() -> list[dict]:
     return api_client.get("/api/jobs/dealbreaker-rejected-with-descriptions").json()
 
