@@ -181,3 +181,34 @@ class TestRetryOnTransientFailure:
             with pytest.raises(api_client.ApiError):
                 api_client.request("GET", "/api/jobs/stats")
         assert mock_request.call_count == 1
+
+
+class TestCatalogCollectionEndpoints:
+    def test_nudge_posts_to_the_catalog_collect_endpoint(self, monkeypatch):
+        monkeypatch.setattr(api_client, "JOBAGENT_API_KEY", "my-secret-key")
+        with patch.object(api_client._client, "request", return_value=_mock_response()) as mock_request:
+            api_client.nudge_catalog_collection()
+        mock_request.assert_called_once()
+        assert mock_request.call_args.args[:2] == ("POST", "/api/catalog/collection/run-now")
+
+    def test_running_reads_the_running_flag(self, monkeypatch):
+        monkeypatch.setattr(api_client, "JOBAGENT_API_KEY", "my-secret-key")
+        with patch.object(
+            api_client._client, "request",
+            return_value=_mock_response(json_body={"running": True}),
+        ) as mock_request:
+            assert api_client.catalog_collection_running() is True
+        assert mock_request.call_args.args[:2] == ("GET", "/api/catalog/collection/status")
+
+    def test_running_is_false_when_the_flag_says_so(self, monkeypatch):
+        monkeypatch.setattr(api_client, "JOBAGENT_API_KEY", "my-secret-key")
+        with patch.object(
+            api_client._client, "request",
+            return_value=_mock_response(json_body={"running": False}),
+        ):
+            assert api_client.catalog_collection_running() is False
+
+    def test_running_defaults_to_false_when_the_flag_is_missing(self, monkeypatch):
+        monkeypatch.setattr(api_client, "JOBAGENT_API_KEY", "my-secret-key")
+        with patch.object(api_client._client, "request", return_value=_mock_response(json_body={})):
+            assert api_client.catalog_collection_running() is False

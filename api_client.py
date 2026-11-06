@@ -172,3 +172,15 @@ def put(path: str, **kwargs) -> httpx.Response:
 
 def delete(path: str, **kwargs) -> httpx.Response:
     return request("DELETE", path, **kwargs)
+
+
+def nudge_catalog_collection() -> None:
+    """Ask JobAgentWeb to run its server-side catalog collection now instead of
+    waiting for the next daily scheduled run. Returns as soon as the run is
+    scheduled, not when it finishes - poll catalog_collection_running() for that."""
+    post("/api/catalog/collection/run-now", timeout=5.0)
+
+
+def catalog_collection_running() -> bool:
+    """Whether JobAgentWeb's server-side catalog collection is currently running."""
+    return bool(get("/api/catalog/collection/status", timeout=5.0).json().get("running", False))

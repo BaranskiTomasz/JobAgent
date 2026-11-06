@@ -1,5 +1,6 @@
 """
-Full pipeline: collect new jobs from LinkedIn, then score them with Claude.
+Full pipeline: nudge the server-side catalog collection, collect new jobs from
+LinkedIn, then score them with Claude.
 
 Usage:
     python scripts/run_all.py
@@ -11,17 +12,25 @@ import argparse
 import logging
 import os
 import sys
+import time
 from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+from api_client import catalog_collection_running, nudge_catalog_collection
 from collector.runner import run as collect
 from db.repositories import job_repository, session_repository, usage_repository
 from evaluator.runner import run as evaluate
 from extractor.runner import run_extraction
 
 logger = logging.getLogger(__name__)
+
+# After nudging JobAgentWeb's catalog collection, poll its status every
+# CATALOG_NUDGE_POLL_INTERVAL_SECONDS and give up after CATALOG_NUDGE_WAIT_BUDGET_SECONDS
+# total elapsed (the first poll's grace sleep counts toward that budget).
+CATALOG_NUDGE_POLL_INTERVAL_SECONDS = 7
+CATALOG_NUDGE_WAIT_BUDGET_SECONDS = 300  # 5 minutes
 
 
 def _configure_logging(log_path: str | None) -> list[logging.Handler]:
@@ -61,6 +70,50 @@ def _run_script(name: str) -> int:
     return subprocess.run([sys.executable, script_path], check=False).returncode
 
 
+def _nudge_catalog_collection() -> None:
+    """Nudge JobAgentWeb's server-side catalog collection to run now and wait,
+    for at most CATALOG_NUDGE_WAIT_BUDGET_SECONDS total, until it finishes, so
+    this run's later stages see fresh catalog jobs. Non-fatal by design: any
+    request error or the wait budget expiring just logs and lets the pipeline
+    continue."""
+    try:
+        nudge_catalog_collection()
+    except Exception as e:
+        logger.warning(f"Catalog collection nudge request failed (non-fatal): {e}")
+        return
+
+    deadline = time.monotonic() + CATALOG_NUDGE_WAIT_BUDGET_SECONDS
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.warning(
+                "Catalog collection did not finish within the 5-minute wait budget; "
+                "proceeding anyway (non-fatal)."
+            )
+            return
+        # Sleep before every status check, the first one included: right after
+        # the nudge returns the server has only just scheduled the run and its
+        # running flag may not be set yet, so a False reading at t=0 would be
+        # mistaken for "already done". The sleep is clamped to the remaining
+        # budget, so the grace sleep counts toward - and never pushes past - the
+        # 5-minute total.
+        time.sleep(min(CATALOG_NUDGE_POLL_INTERVAL_SECONDS, remaining))
+        if time.monotonic() >= deadline:
+            logger.warning(
+                "Catalog collection did not finish within the 5-minute wait budget; "
+                "proceeding anyway (non-fatal)."
+            )
+            return
+        try:
+            running = catalog_collection_running()
+        except Exception as e:
+            logger.warning(f"Catalog collection status check failed (non-fatal): {e}")
+            return
+        if not running:
+            logger.info("Catalog collection nudge finished waiting.")
+            return
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run full JobAgent pipeline: collect then evaluate")
     parser.add_argument("--days",           type=int,  default=None, help="Days back to search (default: since the last successful collection, like the dashboard)")
@@ -84,6 +137,12 @@ def main() -> int:
         logger.info("=" * 60)
         logger.info(f"JobAgent run started, {datetime.now().strftime('%Y-%m-%d %H:%M')}")
         logger.info("=" * 60)
+
+        # Catalog collection runs server-side in JobAgentWeb on its own daily
+        # schedule; nudge it now and wait (bounded) for it, so the extraction and
+        # evaluation stages below see fresh catalog jobs.
+        logger.info("\n=== CATALOG NUDGE ===")
+        _nudge_catalog_collection()
 
         days_back = args.days
         if days_back is None:
