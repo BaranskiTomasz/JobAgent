@@ -133,22 +133,11 @@ def request(method: str, path: str, **kwargs):
 
     if resp.status_code == 401:
         if JOBAGENT_API_KEY:
-            # The key path failed. Fall back to a stored session cookie once
-            # before giving up, in case this installation still has a valid one.
-            cookie = _load_cookie()
-            if cookie:
-                fallback_headers = dict(kwargs.get("headers") or {})
-                fallback_headers.pop("X-JobAgent-Api-Key", None)
-                kwargs["headers"] = fallback_headers
-                _client.cookies.clear()
-                _client.cookies.set("session", cookie)
-                resp = _client.request(method, path, **kwargs)
-                if resp.status_code != 401:
-                    return _raise_for_status(resp)
             raise NotLoggedInError(
-                "JobAgentWeb rejected JOBAGENT_API_KEY, check it matches JOBAGENT_API_KEY "
-                "in JobAgentWeb's own .env on the server."
-                + (" (A stored session cookie was also tried as a fallback and rejected too.)" if cookie else "")
+                "JobAgentWeb rejected JOBAGENT_API_KEY. The key may be wrong or revoked; "
+                "issue a new one, or unset JOBAGENT_API_KEY to use session-cookie login. "
+                "No session-cookie fallback is attempted: it would run the pipeline as "
+                "whoever this machine's stored cookie belongs to."
             )
         raise NotLoggedInError("Session expired or invalid, run `python scripts/login.py` again.")
     return _raise_for_status(resp)

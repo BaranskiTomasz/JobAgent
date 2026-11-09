@@ -71,41 +71,24 @@ class TestRequestWithApiKey:
         assert sent_headers["X-JobAgent-Api-Key"] == "my-secret-key"
 
 
-class TestApiKeyFallbackToCookie:
-    # Regression: a freshly re-provisioned server whose .env is missing the key
-    # used to mean every call 401s forever, even if this installation still has
-    # a valid, unexpired session cookie on disk from before the key was set up.
+class TestApiKeyRejectionIsTerminal:
+    # Under per-user automation keys, falling back to a stored session cookie on
+    # 401 is an identity-confusion hazard: if the key belongs to user B but
+    # ~/.jobagent/session.json belongs to user A, retrying without the key header
+    # would silently proceed with the run as user A, writing data to user A's
+    # account. When an API key is configured, rejection must be terminal.
 
-    def test_falls_back_to_cookie_and_succeeds(self, monkeypatch):
+    def test_401_with_saved_cookie_raises_immediately_without_retry(self, monkeypatch):
         monkeypatch.setattr(api_client, "JOBAGENT_API_KEY", "my-secret-key")
         api_client._save_cookie("saved-cookie-value")
-        responses = [_mock_response(status_code=401), _mock_response(status_code=200, json_body={"ok": True})]
-        with patch.object(api_client._client, "request", side_effect=responses) as mock_request:
-            resp = api_client.request("GET", "/api/jobs/stats")
-        assert resp.status_code == 200
-        assert mock_request.call_count == 2
-
-    def test_fallback_retry_drops_the_api_key_header(self, monkeypatch):
-        monkeypatch.setattr(api_client, "JOBAGENT_API_KEY", "my-secret-key")
-        api_client._save_cookie("saved-cookie-value")
-        responses = [_mock_response(status_code=401), _mock_response(status_code=200)]
-        with patch.object(api_client._client, "request", side_effect=responses) as mock_request:
-            api_client.request("GET", "/api/jobs/stats")
-        retry_headers = mock_request.call_args_list[1].kwargs["headers"]
-        assert "X-JobAgent-Api-Key" not in retry_headers
-
-    def test_fallback_retry_also_401_raises_combined_message(self, monkeypatch):
-        monkeypatch.setattr(api_client, "JOBAGENT_API_KEY", "my-secret-key")
-        api_client._save_cookie("saved-cookie-value")
-        responses = [_mock_response(status_code=401), _mock_response(status_code=401)]
-        with patch.object(api_client._client, "request", side_effect=responses):
-            with pytest.raises(api_client.NotLoggedInError, match="JOBAGENT_API_KEY") as exc_info:
+        with patch.object(api_client._client, "request", return_value=_mock_response(status_code=401)) as mock_request:
+            with pytest.raises(api_client.NotLoggedInError, match="JOBAGENT_API_KEY"):
                 api_client.request("GET", "/api/jobs/stats")
-        assert "also tried" in str(exc_info.value)
+        assert mock_request.call_count == 1
 
     def test_no_cookie_to_fall_back_to_raises_immediately(self, monkeypatch):
         # No session file at all (the _clean_client_state fixture's default
-        # state), same behavior as before this fix, single attempt.
+        # state), single attempt.
         monkeypatch.setattr(api_client, "JOBAGENT_API_KEY", "my-secret-key")
         with patch.object(api_client._client, "request", return_value=_mock_response(status_code=401)) as mock_request:
             with pytest.raises(api_client.NotLoggedInError, match="JOBAGENT_API_KEY"):
@@ -126,9 +109,10 @@ class TestRequestWithSessionCookie:
 
     def test_401_raises_generic_session_message(self):
         api_client._save_cookie("saved-cookie-value")
-        with patch.object(api_client._client, "request", return_value=_mock_response(status_code=401)):
+        with patch.object(api_client._client, "request", return_value=_mock_response(status_code=401)) as mock_request:
             with pytest.raises(api_client.NotLoggedInError, match="scripts/login.py"):
                 api_client.request("GET", "/api/jobs/stats")
+        mock_request.assert_called_once()
 
 
 class TestRetryOnTransientFailure:
