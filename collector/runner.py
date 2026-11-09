@@ -135,9 +135,11 @@ def _fetch_descriptions_in_batches(
 # when the candidate wants Poland at all. The worldwide-remote-board routing
 # this used to also handle (remotive/remoteok/workingnomads/weworkremotely
 # and others) moved to JobAgentWeb's server-side catalog collector along
-# with those sources themselves - this module now only drives the 3 sources
-# that need a real browser.
+# with those sources themselves. DOU and Djinni remain here because the public
+# catalog cannot represent Ukraine as a work country.
 _POLAND_ONLY_SOURCES = frozenset({"theprotocol", "itpracuj"})
+_UKRAINE_ONLY_SOURCES = frozenset({"dou", "djinni"})
+_UKRAINE_ALIASES = frozenset({"ukraine", "ukraina", "україна", "ua", "ukr"})
 _POLAND_ALIASES = frozenset({"poland", "polska", "pl"})
 _POLAND_CITIES = frozenset({
     "warsaw", "warszawa", "krakow", "kraków", "wroclaw", "wrocław", "gdansk", "gdańsk",
@@ -147,15 +149,35 @@ _POLAND_CITIES = frozenset({
 })
 
 
-def _locations_for_source(source_id: str, locations: list[str], work_country: str | None = None) -> list[str]:
+def _remote_markets(preferences: dict) -> list[str]:
+    if "remote" not in (preferences.get("work_mode") or []):
+        return []
+    markets = [preferences["work_country"]] if preferences.get("work_country") else []
+    markets.extend(preferences.get("remote_countries") or [])
+    return list(dict.fromkeys(market for market in markets if market))
+
+
+def _locations_for_source(
+    source_id: str,
+    locations: list[str],
+    work_country: str | None = None,
+    remote_markets: list[str] | None = None,
+) -> list[str]:
     if source_id == "linkedin":
         return [work_country] if work_country else locations
+    markets = [*locations, *(remote_markets or [])]
     if source_id in _POLAND_ONLY_SOURCES:
         wants_poland = any(
             l.strip().lower() in _POLAND_ALIASES or l.strip().lower() in _POLAND_CITIES
-            for l in locations
+            for l in markets
         )
         return ["Poland"] if wants_poland else []
+    if source_id in _UKRAINE_ONLY_SOURCES:
+        wants_ukraine = any(
+            market.strip().lower() in _UKRAINE_ALIASES
+            for market in markets
+        )
+        return ["Ukraine"] if wants_ukraine else []
     return locations
 
 
@@ -418,10 +440,11 @@ def _collect_job_cards(
     max_jobs_per_source: int | None = None,
     catalog: bool = False,
     collected_ids: list[str] | None = None,
+    remote_markets: list[str] | None = None,
 ) -> tuple[int, int, list[tuple[str, str, str]]]:
     applicable_sources = [
         source_id for source_id in selected_sources
-        if _locations_for_source(source_id, locations, work_country)
+        if _locations_for_source(source_id, locations, work_country, remote_markets)
     ]
     for source_id in selected_sources:
         if source_id not in applicable_sources:
@@ -448,7 +471,8 @@ def _collect_job_cards(
     with ThreadPoolExecutor(max_workers=max(1, len(applicable_sources))) as executor:
         futures = {
             executor.submit(
-                _collect_from_source, source_id, _locations_for_source(source_id, locations, work_country),
+                _collect_from_source, source_id,
+                _locations_for_source(source_id, locations, work_country, remote_markets),
                 search_queries, days_back, per_source_budget, global_cap, known_urls, known_urls_lock,
                 rejected_kw, session_id, catalog,
             ): source_id
@@ -503,6 +527,7 @@ def run(
     if not profile_routing and any("linkedin" in source_id.lower() for source_id in selected_sources):
         raise ValueError("LinkedIn is available only for personalized collection")
     work_country = ((preferences.get("work_country") or "").strip() or None) if profile_routing else None
+    remote_markets = _remote_markets(preferences) if profile_routing else []
 
     # Only start/finish our own session when nobody handed us one to reuse:
     # a caller running this as one stage of a larger pipeline already has an
@@ -536,6 +561,7 @@ def run(
             selected_sources, search_queries, criteria["locations"],
             days_back, max_jobs, known_urls, rejected_kw, session_id, work_country,
             max_jobs_per_source, catalog=not profile_routing, collected_ids=collected_ids,
+            remote_markets=remote_markets,
         )
 
         if jobs_pending_description:

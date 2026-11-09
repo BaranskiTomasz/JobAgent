@@ -6,8 +6,9 @@ from config import STEALTH
 from collector.base import RawJob
 from collector.runner import (
     _search_pause_seconds, _fetch_one, _fetch_descriptions_directly, _fetch_descriptions_in_batches,
-    _locations_for_source, _collect_job_cards, run as collector_run,
+    _locations_for_source, _remote_markets, _collect_job_cards, run as collector_run,
 )
+from collector.sources import available as available_sources
 
 
 class TestLocationsForSource:
@@ -48,6 +49,32 @@ class TestLocationsForSource:
     def test_linkedin_gets_mixed_countries_and_cities_unchanged(self):
         locations = ["Germany", "Warsaw"]
         assert _locations_for_source("linkedin", locations) == locations
+
+    @pytest.mark.parametrize("source_id", ["dou", "djinni"])
+    def test_ukraine_only_sources_route_only_for_ukraine(self, source_id):
+        assert _locations_for_source(source_id, ["Ukraine"]) == ["Ukraine"]
+        assert _locations_for_source(source_id, ["Poland"]) == []
+
+    def test_remote_markets_enable_ukraine_source(self):
+        assert _locations_for_source("dou", ["Poland"], "Poland", ["Ukraine"]) == ["Ukraine"]
+
+    def test_remote_markets_enable_poland_source(self):
+        assert _locations_for_source("theprotocol", ["Germany"], "Germany", ["Poland"]) == ["Poland"]
+
+
+def test_remote_markets_unions_work_country_and_remote_countries():
+    preferences = {
+        "work_mode": ["remote"],
+        "work_country": "Poland",
+        "remote_countries": ["Poland", "Ukraine"],
+    }
+    assert _remote_markets(preferences) == ["Poland", "Ukraine"]
+    assert _remote_markets({**preferences, "work_mode": ["hybrid"]}) == []
+
+
+def test_available_sources_include_ukraine_boards():
+    source_ids = {source["id"] for source in available_sources()}
+    assert {"dou", "djinni"} <= source_ids
 
 
 def test_catalog_run_rejects_linkedin():
