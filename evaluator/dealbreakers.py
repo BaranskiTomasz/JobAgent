@@ -7,6 +7,13 @@ from db.repositories import candidate_preferences_repository, job_repository
 # does to filter by *posting* language. _working_language_reason below needs the
 # same set to check the *company's* working language instead.
 from collector.language_filter import _candidate_language_codes
+# Reused rather than duplicated: this is exactly the candidate's full set of
+# acceptable remote-work countries (work_country plus remote_countries, not
+# just whichever one happens to be set), the same computation
+# collector/runner.py already does to decide which sources/locations to
+# search. _geo_reason below needs the identical set to judge whether a
+# posting's remote_regions restriction actually excludes the candidate.
+from collector.runner import _remote_markets
 
 logger = logging.getLogger(__name__)
 
@@ -236,8 +243,15 @@ def apply_dealbreaker_filter(jobs: list[dict]) -> tuple[list[dict], dict]:
     salary_min = prefs.get("salary_min")
     salary_currency = prefs.get("salary_currency")
     work_mode = prefs.get("work_mode") or []
-    work_country = (prefs.get("work_country") or "").strip()
-    remote_countries = [work_country] if work_country else (prefs.get("remote_countries") or [])
+    # Was `[work_country] if work_country else remote_countries` — silently
+    # dropped the candidate's own remote_countries list whenever work_country
+    # was also set (the normal case), the same bug ticket 202611091226's
+    # critique round caught in collector/runner.py's location routing. A
+    # candidate based in Poland who explicitly listed Ukraine (or anywhere
+    # else) in remote_countries had every "remote, Ukraine only" posting
+    # wrongly dealbreaker-rejected, even though that is exactly the market
+    # they said they're open to.
+    remote_countries = _remote_markets(prefs)
     required_seniority = prefs.get("required_seniority_levels")
     seniority_levels = (
         prefs.get("seniority_levels") or []
