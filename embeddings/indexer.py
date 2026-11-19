@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import time
+from collections.abc import Iterator
 
 from config import VOYAGE_EMBED_MODEL
 from collector.utils import build_excerpt
@@ -13,6 +14,16 @@ logger = logging.getLogger(__name__)
 _client: VoyageClient | None = None
 
 BATCH_SIZE = 128  # Voyage API max; safe at 600 RPM
+# Voyage's real per-request limit for voyage-3-large is 320k tokens (max 1000
+# inputs/request) — https://docs.voyageai.com/docs/rate-limits. The len//4
+# estimate below is a rough chars-per-token heuristic that can undercount 2-3x
+# for non-Latin text (Cyrillic, Polish diacritics — this project scrapes
+# DOU.ua/Djinni.co and itpracuj/theprotocol). 60_000 gives >5x headroom under
+# normal (Latin-text) estimation; even at a worst-case 3x undercount that's
+# ~180k real tokens, still under the 320k limit (~1.8x margin, not >5x — don't
+# raise this value without re-checking that margin, or switch to
+# voyageai.Client.count_tokens() for an exact count instead of a heuristic).
+MAX_BATCH_TOKENS = 60_000
 BATCH_DELAY = 1   # seconds between batches (paid tier; increase to 22 if still on free tier)
 
 
@@ -29,7 +40,7 @@ def _job_to_text(job: dict) -> str:
         parts.append(f"Location: {job['location']}")
     excerpt = build_excerpt(job.get("description"), job.get("source"))
     if excerpt:
-        parts.append(excerpt[:2000])
+        parts.append(excerpt)
     return "\n".join(parts)
 
 
@@ -45,6 +56,26 @@ def _embed_with_retry(client: VoyageClient, texts: list[str], input_type: str = 
     )
 
 
+def _job_batches(jobs_with_text: list[tuple[dict, str]]) -> Iterator[list[tuple[dict, str]]]:
+    # Takes (job, text) pairs so _job_to_text() runs once per job in index_jobs(),
+    # not again here just for the token estimate.
+    batch = []
+    estimated_tokens = 0
+
+    for job, text in jobs_with_text:
+        job_tokens = len(text) // 4
+        if batch and (len(batch) >= BATCH_SIZE or estimated_tokens + job_tokens > MAX_BATCH_TOKENS):
+            yield batch
+            batch = []
+            estimated_tokens = 0
+
+        batch.append((job, text))
+        estimated_tokens += job_tokens
+
+    if batch:
+        yield batch
+
+
 def index_jobs(jobs: list[dict]) -> int:
     """Embed jobs and store in job_embeddings (shared across every user). Returns count indexed."""
     if not jobs:
@@ -53,22 +84,22 @@ def index_jobs(jobs: list[dict]) -> int:
     client = _get_client()
     indexed = 0
     n = len(jobs)
+    jobs_with_text = [(job, _job_to_text(job)) for job in jobs]
 
-    for i in range(0, n, BATCH_SIZE):
-        batch = jobs[i:i + BATCH_SIZE]
-        texts = [_job_to_text(j) for j in batch]
+    for batch in _job_batches(jobs_with_text):
+        texts = [text for _, text in batch]
         embeddings = _embed_with_retry(client, texts)
 
         api_client.post("/api/embeddings", json={
             "items": [
                 {"job_id": job["id"], "embedding": emb, "model": VOYAGE_EMBED_MODEL,
                  "text_hash": hashlib.sha256(text.encode()).hexdigest()}
-                for job, text, emb in zip(batch, texts, embeddings)
+                for (job, text), emb in zip(batch, embeddings)
             ],
         })
         indexed += len(batch)
 
-        done = min(i + BATCH_SIZE, n)
+        done = indexed
         logger.info(f"  Indexed {done}/{n} jobs")
 
         if done < n:

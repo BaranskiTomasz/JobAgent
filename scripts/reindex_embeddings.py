@@ -19,7 +19,11 @@ from embeddings.indexer import index_jobs
 
 sys.stdout.reconfigure(line_buffering=True, encoding="utf-8", errors="replace")
 
-_EST_TOKENS_PER_JOB = 500  # title + up to ~2000-char description excerpt
+# Two description caps exist (collector/utils.py): 6000 chars generic, 8000 for
+# LinkedIn (_MAX_DESCRIPTION_CHARS_BY_SOURCE). Deliberately based on the HIGHER
+# one — (8000 + ~50 chars title/location) // 4 ≈ 2012, rounded up to 2100 — so
+# the cost estimate never understates before the [y/N] confirmation.
+_EST_TOKENS_PER_JOB = 2100
 
 
 def main() -> int:

@@ -6,7 +6,8 @@ from unittest.mock import MagicMock, patch
 import api_client
 from db.repositories import job_repository
 from embeddings.indexer import (
-    _embed_with_retry, _job_to_text, _max_scores, index_jobs, score_by_similarity, score_pool_by_similarity,
+    BATCH_SIZE, MAX_BATCH_TOKENS, _embed_with_retry, _job_batches, _job_to_text, _max_scores, index_jobs,
+    score_by_similarity, score_pool_by_similarity,
 )
 
 
@@ -44,12 +45,11 @@ class TestJobToText:
         job = {"title": "Dev", "company": "Co", "location": None, "description": "Python expert"}
         assert "Python expert" in _job_to_text(job)
 
-    def test_truncates_description_at_2000_chars(self):
+    def test_preserves_description_longer_than_old_2000_char_cap(self):
         long_desc = "x" * 3000
         job = {"title": "Dev", "company": "Co", "location": None, "description": long_desc}
         text = _job_to_text(job)
-        assert "x" * 2000 in text
-        assert "x" * 2001 not in text
+        assert long_desc in text
 
     def test_strips_linkedin_junk_before_embedding(self):
         # Regression guard: _job_to_text used to slice job["description"] raw, so
@@ -226,6 +226,28 @@ class TestIndexJobs:
     def test_returns_zero_for_empty_list(self):
         assert index_jobs([]) == 0
 
+    def test_batches_respect_item_limit(self):
+        jobs = [
+            {"id": str(i), "title": "Dev", "company": "Corp", "location": None, "description": "short"}
+            for i in range(BATCH_SIZE + 1)
+        ]
+        jobs_with_text = [(job, _job_to_text(job)) for job in jobs]
+
+        batches = list(_job_batches(jobs_with_text))
+
+        assert [len(batch) for batch in batches] == [BATCH_SIZE, 1]
+
+    def test_batches_respect_estimated_token_budget(self):
+        jobs_with_text = [
+            ({"id": "0"}, "x" * (MAX_BATCH_TOKENS * 2)),  # MAX_BATCH_TOKENS // 2 estimated tokens each
+            ({"id": "1"}, "x" * (MAX_BATCH_TOKENS * 2)),
+            ({"id": "2"}, "x" * 4),
+        ]
+
+        batches = list(_job_batches(jobs_with_text))
+
+        assert [len(batch) for batch in batches] == [2, 1]
+
     @patch("embeddings.indexer.time.sleep")
     @patch("embeddings.indexer._get_client")
     def test_indexes_jobs_and_returns_count(self, mock_get_client, mock_sleep):
@@ -242,6 +264,33 @@ class TestIndexJobs:
 
         count = index_jobs(jobs)
         assert count == 2
+
+    @patch("embeddings.indexer._job_to_text", wraps=_job_to_text)
+    @patch("embeddings.indexer.api_client.post")
+    @patch("embeddings.indexer.time.sleep")
+    @patch("embeddings.indexer._get_client")
+    def test_multiple_batches_post_per_batch_sleep_between_and_count_all(
+        self, mock_get_client, mock_sleep, mock_post, mock_job_to_text
+    ):
+        # BATCH_SIZE + 1 short jobs force 2 batches by item count alone, without
+        # approaching MAX_BATCH_TOKENS.
+        n = BATCH_SIZE + 1
+        mock_client = MagicMock()
+        mock_client.embed.side_effect = lambda texts, input_type="document": [[0.1, 0.2]] * len(texts)
+        mock_get_client.return_value = mock_client
+
+        jobs = [
+            {"id": str(i), "title": "Dev", "company": "Corp", "location": None, "description": "short"}
+            for i in range(n)
+        ]
+
+        count = index_jobs(jobs)
+
+        assert count == n
+        assert mock_client.embed.call_count == 2  # one embed call per batch
+        assert mock_post.call_count == 2  # one /api/embeddings post per batch
+        assert mock_sleep.call_count == 2 - 1  # sleep between batches, not after the last one
+        assert mock_job_to_text.call_count == n  # text computed once per job, not per batch pass
 
     @patch("embeddings.indexer.time.sleep")
     @patch("embeddings.indexer._get_client")
