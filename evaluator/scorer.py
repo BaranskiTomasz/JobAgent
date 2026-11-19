@@ -175,7 +175,7 @@ genuine pro; one that falls short is a genuine con.
 Use the submit_score tool to return your evaluation."""
 
 
-def _build_user_message(job: dict) -> str:
+def build_user_message(job: dict) -> str:
     excerpt = build_excerpt(job.get("description"), job.get("source"))
     note = INCOMPLETE_DESCRIPTION_NOTE if excerpt_looks_incomplete(excerpt) else ""
     return (
@@ -187,7 +187,7 @@ def _build_user_message(job: dict) -> str:
     )
 
 
-_SCORE_TOOL = {
+SCORE_TOOL = {
     "name": "submit_score",
     "description": "Submit the evaluated score for a job listing.",
     "input_schema": {
@@ -229,7 +229,7 @@ _ERROR_RESULT = {
 
 def score_job(job: dict, system_prompt: str) -> ScoreResult:
     """Score a single job using a pre-built system prompt."""
-    user_message = _build_user_message(job)
+    user_message = build_user_message(job)
     client = _get_client()
 
     try:
@@ -243,7 +243,7 @@ def score_job(job: dict, system_prompt: str) -> ScoreResult:
                     "cache_control": {"type": "ephemeral"},
                 }],
                 messages=[{"role": "user", "content": user_message}],
-                tools=[_SCORE_TOOL],
+                tools=[SCORE_TOOL],
                 tool_choice={"type": "tool", "name": "submit_score"},
             ),
             label="Job scoring",
@@ -252,10 +252,21 @@ def score_job(job: dict, system_prompt: str) -> ScoreResult:
     except Exception as e:
         return {**_ERROR_RESULT, "score_reason": f"API error: {e}"}
 
+    if response and response.content:
+        log_anthropic(response, "scorer", CLAUDE_MODEL)
+    return parse_score_response(response)
+
+
+def parse_score_response(response: anthropic.types.Message) -> ScoreResult:
+    """Parses a Claude Message (sync or from a completed batch result) into a
+    ScoreResult. Shared by score_job() (sync path) and scripts/batch_score_backlog.py
+    (batch path) so the two paths can never silently diverge in how they read the
+    submit_score tool call. Does NOT log Anthropic usage itself (the module label
+    differs between the two paths — "scorer" vs "scorer_batch" — so each caller logs
+    its own call with the right label before parsing).
+    """
     if not response or not response.content:
         return {**_ERROR_RESULT, "score_reason": "Empty response from API"}
-
-    log_anthropic(response, "scorer", CLAUDE_MODEL)
 
     if response.stop_reason == "max_tokens":
         # A truncated tool_use block can still parse as valid-but-incomplete

@@ -1,5 +1,5 @@
 from evaluator.scorer import (
-    build_system_prompt, _build_examples_section, _build_calibration_section, _build_user_message,
+    build_system_prompt, _build_examples_section, _build_calibration_section, build_user_message,
     _EXAMPLE_DESC_LIMIT, _EXAMPLE_REASON_LIMIT,
 )
 
@@ -203,7 +203,7 @@ class TestBuildSystemPrompt:
 class TestBuildUserMessage:
     def test_contains_all_job_fields(self):
         job = _ex()
-        msg = _build_user_message(job)
+        msg = build_user_message(job)
         assert "PHP Developer" in msg
         assert "Acme Corp" in msg
         assert "Poland (Remote)" in msg
@@ -211,17 +211,17 @@ class TestBuildUserMessage:
 
     def test_full_description_not_truncated(self):
         job = _ex(description="x" * 5000)
-        msg = _build_user_message(job)
+        msg = build_user_message(job)
         assert "x" * 5000 in msg
 
     def test_none_description_does_not_crash(self):
         job = _ex(description=None)
-        msg = _build_user_message(job)
+        msg = build_user_message(job)
         assert "Title: PHP Developer" in msg
 
     def test_empty_description_does_not_crash(self):
         job = _ex(description="")
-        msg = _build_user_message(job)
+        msg = build_user_message(job)
         assert "Company: Acme Corp" in msg
 
     def test_short_description_gets_incomplete_note(self):
@@ -230,18 +230,18 @@ class TestBuildUserMessage:
         # scorer used to have no way to tell that apart from a genuinely short but
         # complete posting, silently judging a stub as if it were the whole ad.
         job = _ex(description="x" * 200)
-        msg = _build_user_message(job)
+        msg = build_user_message(job)
         assert "short preview" in msg
         assert "treat them as unknown, not as a negative signal" in msg
 
     def test_full_description_does_not_get_incomplete_note(self):
         job = _ex(description="x" * 5000)
-        msg = _build_user_message(job)
+        msg = build_user_message(job)
         assert "short preview" not in msg
 
     def test_empty_description_does_not_get_incomplete_note(self):
         # A missing description is a different, already-handled case, flagging it
         # as "incomplete" too would be redundant noise on top of just having nothing.
         job = _ex(description="")
-        msg = _build_user_message(job)
+        msg = build_user_message(job)
         assert "short preview" not in msg

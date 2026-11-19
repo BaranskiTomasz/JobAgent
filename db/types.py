@@ -35,3 +35,13 @@ class ScoreResult(TypedDict):
     score: float | None
     score_reason: str
     breakdown: dict | None
+
+
+class ScoringBatch(TypedDict):
+    early_result: dict | None
+    jobs: list[dict]
+    system_prompt: str | None
+    # Keyed by job["id"] as-is, whatever type the API returns it as (not str(id) —
+    # that normalization is only done for the separate manifest/in-flight files).
+    fingerprints: dict
+    dealbreaker_stats: dict | None

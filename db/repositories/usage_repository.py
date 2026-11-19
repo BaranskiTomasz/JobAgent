@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 def _calc_cost(
     model: str, input_tokens: int, output_tokens: int = 0,
     cache_creation_tokens: int = 0, cache_read_tokens: int = 0,
+    discount: float = 1.0,
 ) -> float:
     input_rate, output_rate = MODEL_COSTS.get(model, (0.0, 0.0))
     cost = (
@@ -18,14 +19,18 @@ def _calc_cost(
         + cache_creation_tokens * input_rate * CACHE_WRITE_MULTIPLIER
         + cache_read_tokens * input_rate * CACHE_READ_MULTIPLIER
     )
-    return cost / 1_000_000
+    return cost / 1_000_000 * discount
 
 
 def log_usage(
     model: str, module: str, input_tokens: int, output_tokens: int = 0,
     cache_creation_tokens: int = 0, cache_read_tokens: int = 0,
+    discount: float = 1.0,
 ) -> None:
-    cost = _calc_cost(model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens)
+    cost = _calc_cost(
+        model, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+        discount,
+    )
     try:
         api_client.post("/api/usage", json={
             "model": model, "module": module,
@@ -39,7 +44,7 @@ def log_usage(
         logger.warning(f"Failed to log usage ({module}/{model})", exc_info=True)  # never block the main flow
 
 
-def log_anthropic(response, module: str, model: str) -> None:
+def log_anthropic(response, module: str, model: str, discount: float = 1.0) -> None:
     # Includes prompt-cache read/write tokens: response.usage.input_tokens
     # alone excludes those and would undercount every cached call.
     try:
@@ -47,6 +52,7 @@ def log_anthropic(response, module: str, model: str) -> None:
             model, module, response.usage.input_tokens, response.usage.output_tokens,
             cache_creation_tokens=response.usage.cache_creation_input_tokens or 0,
             cache_read_tokens=response.usage.cache_read_input_tokens or 0,
+            discount=discount,
         )
     except Exception:
         logger.warning(f"Failed to log Anthropic usage ({module}/{model})", exc_info=True)
