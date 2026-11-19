@@ -84,6 +84,38 @@ class TestUpload:
         mock_log.assert_called_once()
         assert mock_log.call_args.args[1] == "cv_parse"
 
+    def test_upload_sends_full_extracted_text_to_claude(self, flask_client):
+        tail_marker = "UNIQUE_TAIL_MARKER_CERTYFIKAT_AWS"
+        extracted_text = "A" * 5000 + tail_marker
+        with patch("web.routes.cv._extract_text", return_value=extracted_text), \
+             patch("web.routes.cv.anthropic.Anthropic") as mock_anthropic:
+            mock_anthropic.return_value.messages.create.return_value = _mock_claude_response(
+                '{"stack": [], "years_experience": null, "seniority": "Senior", '
+                '"location": "", "remote_preference": "flexible", "raw_summary": ""}'
+            )
+            data = {"file": (io.BytesIO(b"%PDF-1.4 fake"), "cv.pdf")}
+            resp = flask_client.post("/api/cv/upload", data=data, content_type="multipart/form-data")
+
+        assert resp.status_code == 200
+        messages = mock_anthropic.return_value.messages.create.call_args.kwargs["messages"]
+        assert tail_marker in messages[0]["content"]
+
+    def test_upload_caps_extremely_long_extracted_text(self, flask_client):
+        tail_marker = "UNIQUE_TAIL_MARKER_POZA_LIMITEM_60K"
+        extracted_text = "B" * 70_000 + tail_marker
+        with patch("web.routes.cv._extract_text", return_value=extracted_text), \
+             patch("web.routes.cv.anthropic.Anthropic") as mock_anthropic:
+            mock_anthropic.return_value.messages.create.return_value = _mock_claude_response(
+                '{"stack": [], "years_experience": null, "seniority": "Senior", '
+                '"location": "", "remote_preference": "flexible", "raw_summary": ""}'
+            )
+            data = {"file": (io.BytesIO(b"%PDF-1.4 fake"), "cv.pdf")}
+            resp = flask_client.post("/api/cv/upload", data=data, content_type="multipart/form-data")
+
+        assert resp.status_code == 200
+        messages = mock_anthropic.return_value.messages.create.call_args.kwargs["messages"]
+        assert tail_marker not in messages[0]["content"]
+
 
 class TestActivate:
     def test_activate_switches_active_profile(self, flask_client):

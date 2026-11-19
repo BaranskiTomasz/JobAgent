@@ -29,12 +29,18 @@ def _extract_text(file_bytes: bytes) -> str:
     return "\n".join(page.extract_text() or "" for page in reader.pages)
 
 
+MAX_CV_TEXT_CHARS = 60_000  # ~15k tokens; no real CV (even multi-page) comes close to this —
+# it's a backstop against a degenerate PDF extraction or a mistakenly-uploaded large
+# document, not a real content limit.
+
+
 def _parse_with_claude(raw_text: str) -> dict:
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     response = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=600,
-        messages=[{"role": "user", "content": f"{_PARSE_PROMPT}\n\nCV text:\n{raw_text[:4000]}"}],
+        max_tokens=1024,  # raised from 600: a full (untruncated) CV can yield a longer
+        # stack list and summary, and a truncated reply breaks json.loads() downstream
+        messages=[{"role": "user", "content": f"{_PARSE_PROMPT}\n\nCV text:\n{raw_text[:MAX_CV_TEXT_CHARS]}"}],
     )
     log_anthropic(response, "cv_parse", CLAUDE_MODEL)
     raw = response.content[0].text.strip()
