@@ -37,10 +37,11 @@ _RANKING_TOOL = {
 }
 
 
-def _posting_age_days(posted_at: str | None) -> int | None:
+def posting_age_days(posted_at: str | None) -> int | None:
     """None (not "unknown"/0) when posted_at is absent, LinkedIn and pre-migration
     postings have no reliable per-posting date, and treating that as "just posted"
-    would be worse than not mentioning age at all."""
+    would be worse than not mentioning age at all. Public (no leading underscore):
+    also used by scripts/rank_jobs.py as a ranking signal, not just prompt text."""
     if not posted_at:
         return None
     try:
@@ -70,7 +71,7 @@ def _format_job(job: dict) -> str:
     # discarded, nothing downstream could tell a 5-week-old posting from one
     # collected this morning. None (not "unknown") for sources with no reliable
     # per-posting date (LinkedIn), never state an age we don't actually have.
-    age_days = _posting_age_days(job.get("posted_at"))
+    age_days = posting_age_days(job.get("posted_at"))
     if age_days is not None:
         parts.append(f"Posted: {age_days} day{'s' if age_days != 1 else ''} ago")
 

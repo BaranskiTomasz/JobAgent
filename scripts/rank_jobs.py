@@ -23,7 +23,7 @@ from db.repositories import job_repository, preference_repository
 from embeddings.indexer import embedding_text_hash, score_pool_by_similarity, index_jobs
 from ranker.fusion import fuse_by_rrf
 from ranker.reranker import rerank_jobs
-from ranker.listwise import listwise_rank
+from ranker.listwise import listwise_rank, posting_age_days
 from ranker.debate import debate_rank
 from ranker.rank_cache import reuse_if_unchanged
 from ranker.would_apply import compute_revocations, compute_would_apply
@@ -31,6 +31,7 @@ from ranker.exploration import compute_non_exploration_ranks, pick_exploration_s
 from evaluator.profile import load_active_profile, load_questionnaire_preferences, build_hyde_query
 from evaluator.fingerprints import ranking_fingerprint
 from config import EXPLORATION, RANKING, VOYAGE_EMBED_MODEL
+
 
 try:
     candidate_profile = load_active_profile()
@@ -106,7 +107,26 @@ if excluded_low_score:
 # surface here, the min_score exclusion above was the ONLY place the
 # scorer's score ever affected this pool; ordering into the top-N was 100%
 # cosine similarity until now.
-fused = fuse_by_rrf(ranking_eligible)
+# Freshness leg, reusing ranker/listwise.py's posting_age_days (same
+# None-on-unknown contract it already relies on for prompt text) rather than
+# a second, looser date parser: a job with no reliable per-posting date
+# (LinkedIn, pre-migration) gets no "_posting_freshness" key at all, so
+# fuse_by_rrf's _partial_rank correctly gives it no contribution from this
+# leg instead of a fabricated one. Negated age so a smaller (fresher) value
+# ranks higher, matching _partial_rank's "higher value wins" sort.
+#
+# Scope: this only affects which jobs survive into rerank_pool (top_n_rerank)
+# below, not the pool's own final order after reranking -- the second
+# fuse_by_rrf call a few lines down re-fuses with extra_rank_field="rerank_score"
+# instead (fuse_by_rrf tracks one extra leg at a time), so two jobs that both
+# reach the cross-encoder stage are ordered by it, not by freshness, same as
+# before this change. A deliberate, bounded effect (wider recall for fresh
+# postings), not a change to final ranking.
+for job in ranking_eligible:
+    age_days = posting_age_days(job.get("posted_at"))
+    if age_days is not None:
+        job["_posting_freshness"] = -age_days
+fused = fuse_by_rrf(ranking_eligible, extra_rank_field="_posting_freshness")
 rerank_pool = fused[:RANKING["top_n_rerank"]]
 if len(rerank_pool) > 1:
     print(f"\nReranking top-{len(rerank_pool)} with Voyage cross-encoder...")

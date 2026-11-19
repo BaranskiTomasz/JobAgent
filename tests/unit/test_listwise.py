@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import anthropic
 import httpx
 
-from ranker.listwise import FALLBACK_RANK_REASON, OMITTED_RANK_REASON, _format_job, listwise_rank
+from ranker.listwise import FALLBACK_RANK_REASON, OMITTED_RANK_REASON, _format_job, listwise_rank, posting_age_days
 
 
 def _rate_limit_error():
@@ -135,6 +135,36 @@ class TestFormatJob:
     def test_posting_age_omitted_on_unparseable_value(self):
         text = _format_job(_job(posted_at="not-a-date"))
         assert "Posted:" not in text
+
+
+class TestPostingAgeDays:
+    # Direct coverage for the public contract (now also relied on by
+    # scripts/rank_jobs.py's RRF freshness leg, not just this module's own
+    # prompt text): None on anything unknown, never a fabricated 0.
+
+    def test_none_when_absent(self):
+        assert posting_age_days(None) is None
+
+    def test_none_when_empty_string(self):
+        assert posting_age_days("") is None
+
+    def test_none_when_unparseable(self):
+        assert posting_age_days("not-a-date") is None
+
+    def test_counts_days_since_an_aware_timestamp(self):
+        from datetime import datetime, timedelta, timezone
+        posted = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+        assert posting_age_days(posted) == 5
+
+    def test_naive_timestamp_assumed_utc(self):
+        from datetime import datetime, timedelta
+        posted = (datetime.now() - timedelta(days=3)).replace(tzinfo=None).isoformat()
+        assert posting_age_days(posted) in (2, 3, 4)  # tz-ambiguous by design, never negative/None
+
+    def test_clamped_to_zero_not_negative_for_a_future_timestamp(self):
+        from datetime import datetime, timedelta, timezone
+        posted = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+        assert posting_age_days(posted) == 0
 
 
 @patch("ranker.listwise.random.shuffle")
