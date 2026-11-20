@@ -46,11 +46,15 @@ JobAgent is a local, single-user client with **no database of its own** — ever
 │  6. Semantic retrieval    ← max-sim(applied)                            │
 │          │                   − 0.3 × max-sim(rejected)                  │
 │          │                                                              │
-│  7. Cross-encoder rerank  ← Voyage rerank-2: top-50 → top-20          │
+│  7. RRF fuse → top-50     ← embedding rank ⊕ LLM score ⊕ posting age   │
 │          │                                                              │
-│  8. Listwise rank (Opus)  ← extended thinking, orders ~20–23 jobs     │
+│  8. Cross-encoder rerank  ← Voyage rerank-2 over the top-50            │
 │          │                                                              │
-│  9. Debate / second opinion ← different model critiques ~20–23 jobs,  │
+│  9. RRF fuse → top-20     ← embedding rank ⊕ LLM score ⊕ rerank score  │
+│          │                                                              │
+│ 10. Listwise rank (Opus)  ← extended thinking, orders ~20–23 jobs     │
+│          │                                                              │
+│ 11. Debate / second opinion ← different model critiques ~20–23 jobs,  │
 │                                 demotes anything flagged dealbreaker_risk│
 └──────────────────────────────┬──────────────────────────────────────────┘
                                │ scored + ranked jobs
@@ -191,7 +195,7 @@ python scripts/login.py
 
 ### Step 1 — Fill out the questionnaire
 
-On first visit you land on a landing page and are routed to `/questionnaire`. Upload a PDF résumé — Claude parses it into a structured candidate profile injected into every scoring prompt — plus a set of optional preference sections, all editable later from **Actions → Change criteria** on the dashboard:
+On first visit you land on a landing page and are routed to `/questionnaire`. Upload a PDF résumé — every page is extracted, then Claude parses up to `MAX_CV_TEXT_CHARS` (60,000 chars, `web/routes/cv.py` — a backstop against a degenerate PDF extraction, not a real trim; no genuine CV comes close) into a structured candidate profile injected into every scoring prompt — plus a set of optional preference sections, all editable later from **Actions → Change criteria** on the dashboard:
 
 | Section | Feeds into |
 |---------|-----------|
@@ -474,11 +478,13 @@ Output (`submit_score` tool):
 ```
 `overall_score` is the model's own holistic judgment — never a formula over `sub_scores`, since non-linear reasoning (dealbreaker penalties, MUST-HAVE logic) needs to stay possible. `sub_scores`/`pros`/`cons` are for dashboard transparency, stored as JSON (`score_breakdown`).
 
+**Offline alternative:** `scripts/batch_score_backlog.py submit` / `collect <batch_id>` scores the unscored backlog via the Anthropic Message Batches API instead of the interactive path above — 50% cheaper, up to 24h turnaround. It shares `evaluator/runner.py`'s pool-gathering/dealbreaker-filter/prompt-building and `evaluator/scorer.py`'s response parsing with the synchronous path (same auto-reject threshold, `score_fingerprint`, usage logging at the batch discount rate), and tracks jobs already submitted to an outstanding batch in a local `data/batch_scoring/_in_flight.json` so a normal run doesn't silently re-score and re-bill them while the batch is still pending.
+
 #### 6. Embeddings
 
 `embeddings/indexer.py` + `embeddings/client.py` — **Voyage voyage-3-large**, 1024-dim.
 
-Each job is embedded as: `"{title} at {company}\n{description[:2000]}"` with `input_type="document"`. Vectors are stored via JobAgentWeb's shared `job_embeddings` table — computed once per posting, reused by every user.
+Each job is embedded as `"{title} at {company}\nLocation: {location}\n{excerpt}"`, where `excerpt` is the same capped description (`collector/utils.py::build_excerpt()`, 6000 chars generally / 8000 for LinkedIn) every other prompt in the pipeline reads — the embedder used to re-truncate it to 2000 chars on top of that, silently dropping the tail (conditions, language, geo requirements) from the vector used for semantic matching; it now sees the full excerpt. Embedding batches are capped by both item count (`BATCH_SIZE=128`) and an estimated token budget (`MAX_BATCH_TOKENS=60_000`), since a batch of long, untruncated descriptions can otherwise approach Voyage's real 320k-token/request limit. Vectors are stored via JobAgentWeb's shared `job_embeddings` table — computed once per posting, reused by every user.
 
 With applied-job history, each candidate job is scored from your feedback as:
 ```
@@ -488,17 +494,25 @@ score(job) = max_similarity(job, applied_embeddings)
 
 The 0.3 rejected-similarity penalty pushes results away from job types you've rejected without over-correcting. Falls back to embedding the CV summary when there's no applied-job history yet, so a new candidate's first run still gets semantic ranking instead of arbitrary scrape-recency order. Each new job's retrieval score is stored as `embedding_score`.
 
-#### 7. Cross-encoder rerank
+#### 7. RRF fusion (two stages)
+
+`ranker/fusion.py::fuse_by_rrf()` — Reciprocal Rank Fusion (Cormack et al.), combining per-leg *ranks* (not raw scores, which aren't comparable across an embedding similarity, an LLM score, and a cross-encoder score) via `1/(k + rank)` per leg, `k=60`. A job missing a leg's value gets no contribution from that leg rather than a fabricated rank/tie.
+
+Runs twice, with different legs, because the embedding similarity alone used to decide the whole top-50 before the cross-encoder ever saw anything:
+- **Before the cross-encoder** — embedding rank ⊕ the LLM scorer's `score` ⊕ posting freshness (`ranker/listwise.py::posting_age_days()`, reused rather than reimplemented so the "no reliable date → no contribution" contract stays in exactly one place). This decides which jobs survive into the top-50 rerank pool — a job the scorer rated highly but with only average cosine similarity can now still reach the cross-encoder, which used to be impossible.
+- **After the cross-encoder** — embedding rank ⊕ `score` ⊕ `rerank_score`, deciding the final top-20 that reaches listwise ranking. Freshness has no further effect here — its job was already done, widening who got a cross-encoder look; two jobs that both reach this stage are ordered without it, same as before the freshness leg existed.
+
+#### 8. Cross-encoder rerank
 
 `ranker/reranker.py` — **Voyage rerank-2**.
 
-Top-50 jobs by `embedding_score` are passed to the cross-encoder with a query derived from the CV summary and preference signals. The cross-encoder evaluates each (query, document) pair jointly (not independently like an embedding model), giving more accurate relevance scores. Top-20 by `rerank_score` proceed to listwise ranking.
+The top-50 jobs from the first RRF fusion are passed to the cross-encoder with a query derived from the CV summary and preference signals. The cross-encoder evaluates each (query, document) pair jointly (not independently like an embedding model), giving more accurate relevance scores (`rerank_score`), fed into the second RRF fusion above.
 
-#### 8. Listwise ranking
+#### 9. Listwise ranking
 
 `ranker/listwise.py` — **Claude Opus 4.8** with extended thinking (`adaptive` mode, `effort=high`).
 
-The top-20 jobs from the reranker are passed together in a single prompt; on exploration days, up to three jobs from outside that pool are appended. Opus therefore sees roughly 20–23 jobs simultaneously and ranks them relative to each other — not by absolute score. This is the key advantage over pairwise scoring: Opus can reason about trade-offs across the full set.
+The top-20 jobs from the second RRF fusion are passed together in a single prompt; on exploration days, up to three jobs from outside that pool are appended. Opus therefore sees roughly 20–23 jobs simultaneously and ranks them relative to each other — not by absolute score. This is the key advantage over pairwise scoring: Opus can reason about trade-offs across the full set.
 
 Output format — JSON in `<ranking>` tags:
 ```json
@@ -513,7 +527,7 @@ Each job gets a `listwise_rank` (1 = best) and `rank_reason`. Jobs outside the b
 
 Extended thinking lets Opus internally reason about candidate-job fit before committing to an ordering. This produces more consistent rankings than a simple prompt.
 
-#### 9. Debate / second opinion
+#### 10. Debate / second opinion
 
 `ranker/debate.py::debate_rank()` — runs with **Claude Sonnet 4.6** (deliberately a different model from the Opus listwise ranker) over the 20-job shortlist plus any appended exploration slots, right after listwise ranking.
 
@@ -524,7 +538,7 @@ The critic sees the current order plus each job's `rank_reason` and `score_break
 
 Most jobs get no flag at all — the prompt explicitly discourages flagging just to have something to say. Flag + note are stored (`debate_flag` / `debate_note`) and shown as a "Second opinion" callout on the dashboard.
 
-#### 10. Would-apply flag
+#### 11. Would-apply flag
 
 `ranker/would_apply.py` — phase 1 of an eventual auto-apply feature. Flags jobs the agent would apply to, purely for the candidate to validate — **never sends anything**. Three conditions must all hold: an absolute score floor (`config.WOULD_APPLY["score_floor"]`, currently 7.0, not a relative top-N cut, so a weak ranking run yields zero flagged jobs instead of always flagging "the best of a bad batch"), a rank ceiling on the final post-debate `listwise_rank` (`config.WOULD_APPLY["rank_ceiling"]`, currently 10, so a job whose score alone clears the floor but sits deep in the pool still isn't flagged), and no `dealbreaker_risk` debate flag.
 
@@ -548,7 +562,7 @@ Divergence cases are fed back into the next distillation run as high-priority si
 | Personalized extraction | Haiku 4.5 | usage-dependent |
 | Public catalog extraction | Haiku 5.5 | ~$0.0002 gate; ~$0.0007 full extraction |
 | Dealbreaker filter | — (deterministic) | free |
-| Scoring | Sonnet 4.6 | ~$0.007/job |
+| Scoring | Sonnet 4.6 | ~$0.007/job (half that via the offline Batches API path) |
 | Embedding | Voyage voyage-3-large | $0.18/1M tokens |
 | Reranking | Voyage rerank-2 | $0.05/1M tokens |
 | Listwise rank | Opus 4.8 | ~$0.40/run (top-20 jobs) |
@@ -595,6 +609,7 @@ JobAgent/
 │   ├── client.py                   # Voyage AI wrapper (embed + rerank + cosine)
 │   └── indexer.py                  # Build ideal vector; score by similarity
 ├── ranker/
+│   ├── fusion.py                   # Reciprocal Rank Fusion (embedding ⊕ LLM score ⊕ freshness/rerank legs)
 │   ├── reranker.py                 # Voyage cross-encoder rerank (top-50 → top-20)
 │   ├── listwise.py                 # Opus listwise ranking (top-20 → ordered list)
 │   ├── debate.py                   # Sonnet second opinion over the top-20; demotes dealbreaker_risk
@@ -625,6 +640,7 @@ JobAgent/
 │   ├── run_all.py                  # CLI: full pipeline
 │   ├── search_probe.py             # Inspect per-source retrieval funnels without storing jobs
 │   ├── rescore_new.py              # Re-score new jobs only
+│   ├── batch_score_backlog.py      # Offline scoring via Anthropic Message Batches API (50% cheaper, async)
 │   ├── distill_preferences.py      # Run distillation once
 │   ├── rank_jobs.py                # Run embed + rerank + listwise + debate only
 │   ├── extract_jobs.py             # Backfill structured extraction for all jobs
