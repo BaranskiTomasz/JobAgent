@@ -11,6 +11,12 @@ const LANGUAGE_SUGGESTIONS = [
 ];
 const LEVEL_OPTIONS = ['Native', 'C2', 'C1', 'B2', 'B1', 'A2', 'A1'];
 
+// remote_countries is an independent list on top of work_country (see
+// collector/runner.py::_remote_markets) that this form has no control to
+// edit, but every save is a full POST /api/candidate-preferences replace --
+// round-tripped here so saving any other field doesn't silently wipe it.
+let loadedRemoteCountries = [];
+
 const COUNTRY_SUGGESTIONS = [
   'Poland', 'Germany', 'United Kingdom', 'Netherlands', 'France', 'Spain', 'Portugal', 'Italy',
   'Ireland', 'Belgium', 'Switzerland', 'Austria', 'Sweden', 'Norway', 'Denmark', 'Finland',
@@ -191,6 +197,7 @@ async function savePreferences() {
     avoided_tech: getChipValues('avoid-chips'),
     languages: getLanguages(),
     open_notes: document.getElementById('notes').value.trim(),
+    remote_countries: loadedRemoteCountries,
   };
 
   try {
@@ -238,6 +245,7 @@ async function init() {
   }
 
   const hasPrefs = prefs && Object.keys(prefs).length > 0;
+  loadedRemoteCountries = hasPrefs ? (prefs.remote_countries || []) : [];
 
   const detectedCountry = cv && cv.parsed ? (cv.parsed.location || '') : '';
   const legacyWorkCountry = hasPrefs && (prefs.remote_countries || []).length === 1 ? prefs.remote_countries[0] : '';
