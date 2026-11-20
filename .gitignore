@@ -23,5 +23,8 @@ __pycache__/
 .claude/settings.local.json
 .claude/worktrees/
 
+# Personal CV reference data — must never be committed
+scripts/cv_reference_data.md
+
 # Python package build artifacts
 *.egg-info/
