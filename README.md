@@ -95,6 +95,43 @@ Catalog collection now runs entirely server-side in JobAgentWeb (its own APSched
 
 To inspect retrieval without storing jobs, run `python scripts/search_probe.py --sources theprotocol itpracuj --queries "Backend Engineer" PHP --locations Poland`. The JSON output contains sample jobs and the available upstream → query → date → geography funnel counters.
 
+### Server-side pipeline scheduling (optional)
+
+`scripts/run_all.py` supports a `--skip-collection` flag designed for running the non-browser part of the pipeline on a schedule on a server (e.g. `jobagent-vps`):
+
+- **What `--skip-collection` does and does NOT do:** It extracts, scores, and ranks whatever is already in the job pool (including catalog jobs that JobAgentWeb collects server-side on its own schedule). It **NEVER** runs LinkedIn, theprotocol.it, or it.pracuj.pl collection, which remain strictly manual/local client operations. This separation is deliberate: those sources require real browser automation against sites protected by anti-bot systems (Cloudflare, LinkedIn checkpointing), and running them from a VPS datacenter IP risks flagging or banning the user's personal accounts.
+- **Schedule:** The timer template runs periodically (`*-*-* 06,10,14,18,22:00:00` with a 5-minute randomized delay). Note that this every-4-hours schedule is an initial starting guess, not a measured number, and can be tuned later.
+
+#### Enable runbook (manual, human-run on jobagent-vps)
+
+This sequence must be performed manually by the administrator on `jobagent-vps` (neither this ticket nor any automated agent executes it):
+
+1. **Issue a per-user automation key** using JobAgentWeb's existing script (no new JobAgentWeb code needed):
+   ```bash
+   cd /opt/jobagentweb && POSTGRES_PASSWORD=... .venv/bin/python scripts/issue_automation_key.py --username <user> --label server-pipeline
+   ```
+2. **Create the environment file** `/opt/jobagent/env/<user>.env` containing at least:
+   ```ini
+   JOBAGENT_API_KEY=<the issued key>
+   JOBAGENTWEB_BASE_URL=http://127.0.0.1:8000
+   ANTHROPIC_API_KEY=...
+   VOYAGE_API_KEY=...
+   ```
+   *(Note: `JOBAGENTWEB_BASE_URL` uses localhost/loopback since JobAgent runs on the same VPS as JobAgentWeb; no WireGuard tunnel is needed.)*
+3. **Install the systemd unit templates**:
+   ```bash
+   sudo cp deploy/jobagent-pipeline@.service deploy/jobagent-pipeline@.timer /etc/systemd/system/
+   ```
+4. **Reload systemd and enable the user timer**:
+   ```bash
+   sudo systemctl daemon-reload && sudo systemctl enable --now jobagent-pipeline@<user>.timer
+   ```
+5. **Verify status and logs**:
+   ```bash
+   sudo systemctl status jobagent-pipeline@<user>.timer
+   sudo journalctl -u jobagent-pipeline@<user>.service
+   ```
+
 ---
 
 ## Setup

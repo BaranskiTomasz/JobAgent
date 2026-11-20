@@ -124,6 +124,7 @@ def main() -> int:
     parser.add_argument("--locations",      nargs="*", default=None, help="Override search locations")
     parser.add_argument("--log-file",       default=None,            help="Append output to this file (e.g. data/logs/run.log)")
     parser.add_argument("--skip-ranking",   action="store_true",     help="Skip embeddings and ranking")
+    parser.add_argument("--skip-collection", action="store_true", help="Skip the local browser collector (LinkedIn/theprotocol.it/itpracuj); run everything else against whatever's already in the pool")
     args = parser.parse_args()
 
     handlers = _configure_logging(args.log_file)
@@ -149,22 +150,26 @@ def main() -> int:
             days_back = session_repository.days_since_last_collection()
             logger.info(f"No --days given, using {days_back} day(s) since the last successful collection.")
 
-        logger.info("\n=== COLLECTOR ===")
-        try:
-            c_result = collect(
-                days_back=days_back,
-                max_jobs=args.max_jobs,
-                titles=args.titles,
-                search_queries_override=args.search_queries,
-                locations=args.locations,
-                max_jobs_per_source=args.max_jobs_per_source,
-            )
-        except Exception as e:
-            logger.error(f"Collector failed: {e}")
-            logger.info("Skipping evaluator.")
-            return 1
+        if args.skip_collection:
+            logger.info("\n=== COLLECTOR ===\nSkipped by --skip-collection")
+            logger.info("Collection skipped.")
+        else:
+            logger.info("\n=== COLLECTOR ===")
+            try:
+                c_result = collect(
+                    days_back=days_back,
+                    max_jobs=args.max_jobs,
+                    titles=args.titles,
+                    search_queries_override=args.search_queries,
+                    locations=args.locations,
+                    max_jobs_per_source=args.max_jobs_per_source,
+                )
+            except Exception as e:
+                logger.error(f"Collector failed: {e}")
+                logger.info("Skipping evaluator.")
+                return 1
 
-        logger.info(f"\nCollector result: found={c_result['jobs_found']}  new={c_result['jobs_new']}")
+            logger.info(f"\nCollector result: found={c_result['jobs_found']}  new={c_result['jobs_new']}")
 
         # Matches the dashboard pipeline's stage order (web/routes/runner.py):
         # COLLECTOR -> DISTILL -> EXTRACTOR -> EVALUATOR -> PRUNE QUERIES -> RANKING.

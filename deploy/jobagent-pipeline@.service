@@ -1,0 +1,10 @@
+[Unit]
+Description=JobAgent - server-side scoring/ranking pipeline for %i (no collection)
+After=network.target
+
+[Service]
+Type=oneshot
+User=jobagent
+WorkingDirectory=/opt/jobagent
+EnvironmentFile=/opt/jobagent/env/%i.env
+ExecStart=/opt/jobagent/.venv/bin/python scripts/run_all.py --skip-collection

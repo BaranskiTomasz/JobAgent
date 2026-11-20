@@ -29,6 +29,34 @@ def test_main_records_a_run_summary_on_success(
         exit_code = run_all.main()
 
     assert exit_code == 0
+    mock_collect.assert_called_once()
+    mock_record.assert_called_once()
+    assert mock_record.call_args[0][0] == "run_all"
+
+
+@patch("scripts.run_all.collect")
+@patch("db.repositories.job_repository.get_new_needing_extraction", return_value=[{"id": "job-1"}])
+@patch("db.repositories.job_repository.get_unscored", return_value=[{"id": "job-1"}])
+@patch("scripts.run_all.evaluate")
+@patch("scripts.run_all.run_extraction", return_value=1)
+@patch("scripts.run_all._run_script", return_value=0)
+@patch("scripts.run_all.usage_repository.record_run_summary")
+@patch("scripts.run_all._nudge_catalog_collection")
+def test_main_skip_collection(
+    mock_nudge, mock_record, mock_run_script, mock_run_extraction, mock_evaluate,
+    mock_get_unscored, mock_get_needing_extraction, mock_collect,
+):
+    mock_evaluate.return_value = {"jobs_scored": 1}
+
+    with patch("sys.argv", ["run_all.py", "--skip-collection"]):
+        exit_code = run_all.main()
+
+    assert exit_code == 0
+    mock_collect.assert_not_called()
+    mock_nudge.assert_called_once()
+    mock_run_extraction.assert_called_once_with([{"id": "job-1"}])
+    mock_evaluate.assert_called_once_with(jobs=[{"id": "job-1"}])
+    assert mock_run_script.call_count >= 1
     mock_record.assert_called_once()
     assert mock_record.call_args[0][0] == "run_all"
 
